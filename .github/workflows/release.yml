@@ -102,22 +102,8 @@ jobs:
             --password "$APPLE_APP_PASSWORD" \
             --wait
           rm tengu-init.zip
-
-      - name: Staple notarization ticket
-        if: runner.os == 'macOS'
-        run: |
-          # Retry stapling with exponential backoff (ticket propagation delay)
-          for i in 1 2 3 4 5; do
-            echo "Staple attempt $i..."
-            if xcrun stapler staple target/${{ matrix.target }}/release/tengu-init; then
-              echo "Stapling succeeded!"
-              exit 0
-            fi
-            echo "Staple failed, waiting $((i * 15)) seconds..."
-            sleep $((i * 15))
-          done
-          echo "All staple attempts failed"
-          exit 1
+          # Note: Standalone Mach-O binaries cannot be stapled (only .app/.dmg/.pkg).
+          # Gatekeeper will verify notarization online with Apple's servers.
 
       - name: Rename binary
         run: cp target/${{ matrix.target }}/release/tengu-init ${{ matrix.artifact }}
