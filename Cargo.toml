@@ -1,0 +1,44 @@
+[package]
+name = "tengu-init"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+description = "Provision Tengu PaaS on Hetzner Cloud"
+license = "MIT"
+authors = ["Chi <chi@localhost>"]
+repository = "https://github.com/saiden-dev/tengu-init"
+keywords = ["tengu", "paas", "hetzner", "cloud-init", "provisioning"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Error handling
+anyhow = "1"
+
+# CLI output
+comfy-table = "7"
+console = "0.15"
+dialoguer = "0.11"
+indicatif = "0.17"
+
+# Templating
+tera = "1"
+
+# Temp files
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
