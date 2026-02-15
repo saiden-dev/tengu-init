@@ -15,17 +15,21 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            name: tengu-init-linux-amd64
+            artifact: tengu-init-linux-amd64
+            label: linux-amd64
             cross: false
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            name: tengu-init-linux-arm64
+            artifact: tengu-init-linux-arm64
+            label: linux-arm64
             cross: true
           - target: aarch64-apple-darwin
             os: macos-latest
-            name: tengu-init-apple-silicon
+            artifact: tengu-init-apple-silicon
+            label: apple-silicon
             cross: false
 
+    name: build (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -48,13 +52,13 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/tengu-init ${{ matrix.name }}
+        run: cp target/${{ matrix.target }}/release/tengu-init ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.name }}
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
 
   release:
     needs: build
