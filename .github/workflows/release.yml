@@ -66,6 +66,43 @@ jobs:
         if: matrix.deb != '' && matrix.cross
         run: cargo deb --no-build --no-strip --target ${{ matrix.target }} --output ${{ matrix.deb }}
 
+      # macOS signing and notarization
+      - name: Import certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import /tmp/certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
+          rm /tmp/certificate.p12
+
+      - name: Sign binary
+        if: runner.os == 'macOS'
+        run: |
+          codesign --force --options runtime --sign "Developer ID Application: Adam Ladachowski (TD4G3U97DW)" \
+            target/${{ matrix.target }}/release/tengu-init
+          codesign -dv target/${{ matrix.target }}/release/tengu-init
+
+      - name: Notarize binary
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          zip -j tengu-init.zip target/${{ matrix.target }}/release/tengu-init
+          xcrun notarytool submit tengu-init.zip \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+          rm tengu-init.zip
+
       - name: Rename binary
         run: cp target/${{ matrix.target }}/release/tengu-init ${{ matrix.artifact }}
 
