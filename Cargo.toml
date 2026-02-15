@@ -1,6 +1,6 @@
 [package]
 name = "tengu-init"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.93"
 description = "Provision Tengu PaaS on Hetzner Cloud"
@@ -32,6 +32,19 @@ tera = "1"
 
 # Temp files
 tempfile = "3"
+
+[package.metadata.deb]
+maintainer = "Chi <chi@localhost>"
+copyright = "2026 Chi"
+extended-description = """\
+Provision Tengu PaaS on Hetzner Cloud with a single command. \
+Handles server creation, cloud-init configuration, SSL certificates, \
+and service setup automatically."""
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/tengu-init", "usr/bin/", "755"],
+]
 
 [lints.rust]
 unsafe_code = "forbid"

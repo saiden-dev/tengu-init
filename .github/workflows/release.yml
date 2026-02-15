@@ -16,16 +16,19 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: tengu-init-linux-amd64
+            deb: tengu-init_amd64.deb
             label: linux-amd64
             cross: false
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: tengu-init-linux-arm64
+            deb: tengu-init_arm64.deb
             label: linux-arm64
             cross: true
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact: tengu-init-apple-silicon
+            deb: ""
             label: apple-silicon
             cross: false
 
@@ -43,6 +46,10 @@ jobs:
         if: matrix.cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
+      - name: Install cargo-deb
+        if: matrix.deb != ''
+        run: cargo install cargo-deb
+
       - name: Build with cross
         if: matrix.cross
         run: cross build --release --target ${{ matrix.target }}
@@ -51,14 +58,25 @@ jobs:
         if: ${{ !matrix.cross }}
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Build deb
+        if: matrix.deb != ''
+        run: cargo deb --no-build --target ${{ matrix.target }} --output ${{ matrix.deb }}
+
       - name: Rename binary
         run: cp target/${{ matrix.target }}/release/tengu-init ${{ matrix.artifact }}
 
-      - name: Upload artifact
+      - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
+
+      - name: Upload deb
+        if: matrix.deb != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.deb }}
+          path: ${{ matrix.deb }}
 
   release:
     needs: build
