@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://tengu.to">
-    <img src="https://tengu.to/apple-touch-icon.png" alt="Tengu" width="120" height="120">
+    <img src="logo.png" alt="Tengu" width="120" height="120">
   </a>
 </p>
 
