@@ -31,7 +31,6 @@ packages:
   - vim
   - fail2ban
   - ufw
-  - golang-go
 
 write_files:
   - path: /etc/fail2ban/jail.local
@@ -102,8 +101,15 @@ runcmd:
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin postgresql-16 postgresql-16-pgvector
 
+  # Install Go 1.24 (required for Caddy - Ubuntu's golang-go is too old)
+  - |
+    ARCH=$(dpkg --print-architecture)
+    curl -sL "https://go.dev/dl/go1.24.1.linux-${ARCH}.tar.gz" | tar -C /usr/local -xzf -
+    echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/golang.sh
+
   # Build Caddy with Cloudflare DNS plugin using xcaddy
   - |
+    export PATH=/usr/local/go/bin:$PATH
     export HOME=/root
     export GOPATH=/root/go
     go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
