@@ -99,6 +99,10 @@ runcmd:
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin postgresql-16 postgresql-16-pgvector
 
+  # Install Ollama
+  - curl -fsSL https://ollama.com/install.sh | sh
+  - systemctl enable --now ollama
+
   # Install tengu-caddy (Caddy with Cloudflare DNS plugin)
   - |
     ARCH=$(dpkg --print-architecture)
