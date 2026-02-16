@@ -422,6 +422,7 @@ fn render_cloud_init(cfg: &ResolvedConfig) -> Result<String> {
     context.insert("domain_api", &format!("api.{}", cfg.domain_platform));
     context.insert("domain_docs", &format!("docs.{}", cfg.domain_platform));
     context.insert("domain_git", &format!("git.{}", cfg.domain_platform));
+    context.insert("domain_ssh", &format!("ssh.{}", cfg.domain_platform));
     context.insert("cf_api_key", &cfg.cf_api_key);
     context.insert("cf_email", &cfg.cf_email);
     context.insert("resend_api_key", &cfg.resend_api_key);
@@ -550,7 +551,7 @@ fn print_success(cfg: &ResolvedConfig, ip: &str) {
 
     table.add_row(vec![
         Cell::new("SSH").fg(Color::Cyan),
-        Cell::new(format!("ssh chi@{}", ip)),
+        Cell::new(format!("ssh chi@ssh.{}", cfg.domain_platform)),
     ]);
     table.add_row(vec![
         Cell::new("API").fg(Color::Cyan),
