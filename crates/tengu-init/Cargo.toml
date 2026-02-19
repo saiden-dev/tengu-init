@@ -1,6 +1,6 @@
 [package]
 name = "tengu-init"
-version = "0.2.0"
+version = "0.2.1"
 description = "Provision Tengu PaaS on Hetzner Cloud"
 keywords = ["tengu", "paas", "hetzner", "cloud-init", "provisioning"]
 categories = ["command-line-utilities"]
