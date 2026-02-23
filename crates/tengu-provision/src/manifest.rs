@@ -67,7 +67,7 @@ impl Manifest {
     /// - User setup with SSH keys and sudo
     /// - Base packages (curl, wget, git, jq, htop, vim, fail2ban, ufw)
     /// - Docker from Ubuntu repositories (docker.io)
-    /// - `PostgreSQL` 16 with pgvector extension
+    /// - `PostgreSQL` 18 with pgvector extension
     /// - Ollama for AI/ML
     /// - tengu-caddy (custom Caddy build with Cloudflare DNS)
     /// - Tengu configuration files
@@ -118,12 +118,12 @@ impl Manifest {
         manifest.add_step(InstallPackage::new("docker-compose"));
 
         // =========================================================
-        // Phase 4: PostgreSQL 16 with pgvector
+        // Phase 4: PostgreSQL 18 with pgvector
         // =========================================================
         manifest.add_step(
-            InstallPackage::new("postgresql-16").with_repository(Repository::postgresql()),
+            InstallPackage::new("postgresql-18").with_repository(Repository::postgresql()),
         );
-        manifest.add_step(InstallPackage::new("postgresql-16-pgvector"));
+        manifest.add_step(InstallPackage::new("postgresql-18-pgvector"));
 
         // =========================================================
         // Phase 5: Ollama

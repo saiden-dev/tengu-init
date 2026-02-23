@@ -458,13 +458,13 @@ impl Manifest {
             repository: None,
         }));
 
-        // 4. PostgreSQL 16 + pgvector
+        // 4. PostgreSQL 18 + pgvector
         steps.push(Box::new(InstallPackage {
-            name: "postgresql-16".into(),
+            name: "postgresql-18".into(),
             repository: Some(Repository::postgresql()),
         }));
         steps.push(Box::new(InstallPackage {
-            name: "postgresql-16-pgvector".into(),
+            name: "postgresql-18-pgvector".into(),
             repository: None,
         }));
 
