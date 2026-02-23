@@ -108,7 +108,7 @@ runcmd:
   # Install tengu-caddy (Caddy with Cloudflare DNS plugin)
   - |
     ARCH=$(dpkg --print-architecture)
-    wget -q "https://github.com/saiden-dev/tengu-caddy/releases/latest/download/tengu-caddy_2.10.2-1_${ARCH}.deb" -O /tmp/tengu-caddy.deb
+    wget -q "https://github.com/tengu-apps/tengu-caddy/releases/latest/download/tengu-caddy_${ARCH}.deb" -O /tmp/tengu-caddy.deb
     dpkg -i /tmp/tengu-caddy.deb
     rm /tmp/tengu-caddy.deb
 

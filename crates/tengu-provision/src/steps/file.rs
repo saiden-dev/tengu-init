@@ -52,19 +52,6 @@ impl WriteFile {
         hex::encode(result)
     }
 
-    /// Generate a unique heredoc delimiter that won't appear in content
-    fn heredoc_delimiter(&self) -> &'static str {
-        // Use a delimiter unlikely to appear in config files
-        if self.content.contains("TENGU_EOF") {
-            if self.content.contains("__TENGU_FILE_END__") {
-                "__FILE_CONTENT_END_MARKER__"
-            } else {
-                "__TENGU_FILE_END__"
-            }
-        } else {
-            "TENGU_EOF"
-        }
-    }
 }
 
 impl Step for WriteFile {
@@ -85,6 +72,8 @@ impl Step for WriteFile {
     }
 
     fn to_bash(&self) -> Vec<String> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+
         let mut cmds = vec![];
 
         // Create parent directory
@@ -92,18 +81,17 @@ impl Step for WriteFile {
 
         // Pre-compute expected hash at generation time
         let expected_hash = self.content_hash();
-        let delimiter = self.heredoc_delimiter();
+
+        // Use base64 encoding to avoid heredoc indentation issues
+        let encoded = STANDARD.encode(&self.content);
 
         // Compare hash and write only if different
-        // Note: we add a trailing newline to match heredoc behavior
         cmds.push(format!(
             r#"CURRENT=$(sha256sum '{}' 2>/dev/null | cut -d' ' -f1 || echo 'none')
 if [ "$CURRENT" != "{}" ]; then
-    cat > '{}' << '{}'
-{}
-{}
+echo '{}' | base64 -d > '{}'
 fi"#,
-            self.path, expected_hash, self.path, delimiter, self.content, delimiter
+            self.path, expected_hash, encoded, self.path
         ));
 
         if let Some(perms) = &self.permissions {

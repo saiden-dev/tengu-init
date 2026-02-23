@@ -22,6 +22,7 @@ thiserror.workspace = true
 # Crypto (for content checksums)
 sha2.workspace = true
 hex.workspace = true
+base64 = "0.22.1"
 
 [lints]
 workspace = true

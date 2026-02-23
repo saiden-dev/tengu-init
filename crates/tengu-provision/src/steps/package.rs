@@ -168,7 +168,7 @@ impl InstallDebFromUrl {
     pub fn tengu_caddy() -> Self {
         Self::new(
             "tengu-caddy",
-            "https://github.com/saiden-dev/tengu-caddy/releases/latest/download/tengu-caddy_{arch}.deb",
+            "https://github.com/tengu-apps/tengu-caddy/releases/latest/download/tengu-caddy_2.10.2-1_{arch}.deb",
         )
     }
 }
@@ -191,7 +191,7 @@ impl Step for InstallDebFromUrl {
         let cmd = format!(
             r#"if ! {check}; then
     ARCH=$(dpkg --print-architecture)
-    URL=$(echo '{url}' | sed "s/{{{{arch}}}}/$ARCH/g")
+    URL=$(echo '{url}' | sed "s/{{arch}}/$ARCH/g")
     wget -q "$URL" -O /tmp/{name}.deb
     dpkg -i /tmp/{name}.deb || apt-get install -f -y
     rm -f /tmp/{name}.deb
@@ -210,7 +210,7 @@ fi"#,
         // So to_bash() just returns the actual installation commands
         vec![format!(
             r#"ARCH=$(dpkg --print-architecture)
-URL=$(echo '{url}' | sed "s/{{{{arch}}}}/$ARCH/g")
+URL=$(echo '{url}' | sed "s/{{arch}}/$ARCH/g")
 wget -q "$URL" -O /tmp/{name}.deb
 dpkg -i /tmp/{name}.deb || apt-get install -f -y
 rm -f /tmp/{name}.deb"#,

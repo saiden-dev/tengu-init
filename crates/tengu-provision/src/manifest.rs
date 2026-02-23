@@ -66,7 +66,7 @@ impl Manifest {
     /// This builds the full installation sequence including:
     /// - User setup with SSH keys and sudo
     /// - Base packages (curl, wget, git, jq, htop, vim, fail2ban, ufw)
-    /// - Docker from official repository
+    /// - Docker from Ubuntu repositories (docker.io)
     /// - `PostgreSQL` 16 with pgvector extension
     /// - Ollama for AI/ML
     /// - tengu-caddy (custom Caddy build with Cloudflare DNS)
@@ -112,12 +112,10 @@ impl Manifest {
         }
 
         // =========================================================
-        // Phase 3: Docker from Official Repository
+        // Phase 3: Docker from Ubuntu Repositories
         // =========================================================
-        manifest.add_step(InstallPackage::new("docker-ce").with_repository(Repository::docker()));
-        manifest.add_step(InstallPackage::new("docker-ce-cli"));
-        manifest.add_step(InstallPackage::new("containerd.io"));
-        manifest.add_step(InstallPackage::new("docker-compose-plugin"));
+        manifest.add_step(InstallPackage::new("docker.io"));
+        manifest.add_step(InstallPackage::new("docker-compose"));
 
         // =========================================================
         // Phase 4: PostgreSQL 16 with pgvector
@@ -227,14 +225,8 @@ impl Manifest {
         // =========================================================
         // Phase 11: Install Tengu .deb Package
         // =========================================================
-        let tengu_deb_url = if config.release.is_empty() {
-            "https://github.com/saiden-dev/tengu/releases/latest/download/tengu_{arch}.deb".into()
-        } else {
-            format!(
-                "https://github.com/saiden-dev/tengu/releases/download/{}/tengu_{{arch}}.deb",
-                config.release
-            )
-        };
+        let tengu_deb_url =
+            "https://github.com/tengu-apps/tengu-deb/releases/latest/download/tengu_0.1.0-1_{arch}.deb";
         manifest.add_step(InstallDebFromUrl::new("tengu", tengu_deb_url));
 
         // Enable and start tengu service
