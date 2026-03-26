@@ -96,6 +96,8 @@ tengu-init show bash
 
 Credentials are resolved in order: **CLI flags > environment variables > config file > interactive prompt**.
 
+During provisioning, `tengu-init` also checks for `~/.cloudflared/cert.pem`. If missing, it runs `cloudflared tunnel login` to open a browser for Cloudflare Tunnel authentication. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) before provisioning.
+
 ### Config File
 
 Create `~/.config/tengu/init.toml`:

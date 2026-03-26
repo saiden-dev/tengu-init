@@ -187,6 +187,27 @@ impl Manifest {
                 .with_owner("root:root"),
         );
 
+        // Caddy systemd drop-in for Cloudflare API token
+        manifest.add_step(
+            EnsureDirectory::new("/etc/systemd/system/caddy.service.d")
+                .with_permissions("0755")
+                .with_owner("root:root"),
+        );
+        manifest.add_step(
+            WriteFile::new(
+                "/etc/systemd/system/caddy.service.d/cloudflare.conf",
+                config.caddy_cloudflare_env(),
+            )
+            .with_permissions("0644")
+            .with_owner("root:root"),
+        );
+
+        // Reload systemd after drop-in
+        manifest.add_step(RunCommand::new(
+            "Reload systemd daemon",
+            "systemctl daemon-reload",
+        ));
+
         // fail2ban configuration
         manifest.add_step(
             WriteFile::new("/etc/fail2ban/jail.local", config.fail2ban_config())

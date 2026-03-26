@@ -75,28 +75,45 @@ ssh = "ssh.{}"
         )
     }
 
-    /// Generate Caddyfile content
+    /// Generate Caddyfile content (uses Cloudflare DNS challenge for TLS)
     pub fn caddyfile(&self) -> String {
         format!(
             r"{{
     email {}
 }}
 
+(cf_tls) {{
+    tls {{
+        dns cloudflare {{env.CF_API_TOKEN}}
+    }}
+}}
+
 import sites/*.caddy
 
 api.{} {{
+    import cf_tls
     reverse_proxy localhost:8080
 }}
 
 docs.{} {{
+    import cf_tls
     reverse_proxy localhost:8080
 }}
 
 git.{} {{
+    import cf_tls
     reverse_proxy localhost:8080
 }}
 ",
             self.cf_email, self.domain_platform, self.domain_platform, self.domain_platform,
+        )
+    }
+
+    /// Generate Caddy systemd drop-in for Cloudflare API token
+    pub fn caddy_cloudflare_env(&self) -> String {
+        format!(
+            "[Service]\nEnvironment=\"CF_API_TOKEN={}\"\n",
+            self.cf_api_key
         )
     }
 

@@ -120,7 +120,7 @@ runcmd:
     Environment="CF_API_TOKEN={{ cf_api_key }}"
     CFEOF
 
-  # Configure Caddy (TLS-ALPN-01 used for auto HTTPS)
+  # Configure Caddy (Cloudflare DNS challenge for TLS)
   - mkdir -p /etc/caddy/sites
   - |
     cat > /etc/caddy/Caddyfile << 'CADDYEOF'
@@ -128,17 +128,26 @@ runcmd:
         email {{ cf_email }}
     }
 
+    (cf_tls) {
+        tls {
+            dns cloudflare {env.CF_API_TOKEN}
+        }
+    }
+
     import sites/*.caddy
 
     api.{{ domain_platform }} {
+        import cf_tls
         reverse_proxy localhost:8080
     }
 
     docs.{{ domain_platform }} {
+        import cf_tls
         reverse_proxy localhost:8080
     }
 
     git.{{ domain_platform }} {
+        import cf_tls
         reverse_proxy localhost:8080
     }
     CADDYEOF
