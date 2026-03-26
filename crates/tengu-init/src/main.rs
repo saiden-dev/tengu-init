@@ -1,8 +1,8 @@
-//! Tengu Cloud Init - Hetzner VPS and Baremetal Provisioning
+//! Tengu Init - Server Provisioning
 //!
-//! Provisions a new server with Tengu `PaaS` installed.
-//! - Hetzner Cloud: Creates a new VPS with cloud-init
-//! - Baremetal: Provisions an existing server via SSH
+//! Provisions a server with Tengu `PaaS` installed.
+//! - Default: connects to user@host via SSH and provisions
+//! - `--hetzner`: creates a Hetzner VPS first, then provisions it
 
 mod providers;
 
@@ -12,10 +12,11 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use std::{env, fs, thread};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use comfy_table::{Cell, Color, Table, presets::UTF8_FULL_CONDENSED};
 use console::{Emoji, style};
+use dialoguer::{Input, Password};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use tengu_provision::{BashRenderer, CloudInitRenderer, Manifest, Renderer, TenguConfig};
@@ -27,7 +28,6 @@ static LOOKING_GLASS: Emoji<'_, '_> = Emoji("🔍 ", "");
 static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
 static SPARKLE: Emoji<'_, '_> = Emoji("✨ ", "");
 static CHECK: Emoji<'_, '_> = Emoji("✅ ", "✓ ");
-static CROSS: Emoji<'_, '_> = Emoji("❌ ", "✗ ");
 static GEAR: Emoji<'_, '_> = Emoji("⚙️  ", "");
 static FOLDER: Emoji<'_, '_> = Emoji("📁 ", "");
 
@@ -93,98 +93,19 @@ struct NotificationsConfig {
 #[command(
     name = "tengu-init",
     version,
-    about = "Provision Tengu PaaS on Hetzner Cloud or baremetal servers"
+    about = "Provision Tengu PaaS on cloud or baremetal servers"
 )]
 struct Args {
-    /// Subcommand (defaults to hetzner if not specified)
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Config file path (global)
-    #[arg(short, long, global = true)]
-    config: Option<PathBuf>,
-
-    /// Show config file path and exit
-    #[arg(long)]
-    show_config: bool,
-}
-
-#[derive(Subcommand, Debug)]
-enum Commands {
-    /// Provision on Hetzner Cloud (default)
-    Hetzner(HetznerArgs),
-
-    /// Provision on existing server via SSH
-    Baremetal(BaremetalArgs),
-
-    /// Show generated provisioning config
-    Show(ShowArgs),
-}
-
-#[derive(Parser, Debug)]
-struct HetznerArgs {
-    /// Server name
+    /// SSH destination (user@host), required unless --hetzner
     #[arg()]
-    name: Option<String>,
+    host: Option<String>,
 
-    /// Server type (e.g., cax41, cpx42)
-    #[arg(short = 't', long)]
-    server_type: Option<String>,
-
-    /// Datacenter location (e.g., hel1, fsn1, nbg1)
-    #[arg(short, long)]
-    location: Option<String>,
-
-    /// Ubuntu image
+    /// Create Hetzner VPS first (uses hcloud CLI)
     #[arg(long)]
-    image: Option<String>,
-
-    /// Platform domain (e.g., tengu.to)
-    #[arg(long)]
-    domain_platform: Option<String>,
-
-    /// Apps domain (e.g., tengu.host)
-    #[arg(long)]
-    domain_apps: Option<String>,
-
-    /// Cloudflare API key
-    #[arg(long)]
-    cf_api_key: Option<String>,
-
-    /// Cloudflare email
-    #[arg(long)]
-    cf_email: Option<String>,
-
-    /// Resend API key
-    #[arg(long)]
-    resend_api_key: Option<String>,
-
-    /// Notification email
-    #[arg(long)]
-    notify_email: Option<String>,
-
-    /// SSH public key
-    #[arg(long)]
-    ssh_key: Option<String>,
-
-    /// Tengu release tag
-    #[arg(long)]
-    release: Option<String>,
-
-    /// Force recreation if server exists
-    #[arg(short, long)]
-    force: bool,
-
-    /// Dry run - show config without creating
-    #[arg(long)]
-    dry_run: bool,
-}
-
-#[derive(Parser, Debug)]
-struct BaremetalArgs {
-    /// SSH destination (user@host). User must have passwordless sudo
-    #[arg()]
-    host: String,
+    hetzner: bool,
 
     /// SSH port
     #[arg(short, long, default_value = "22")]
@@ -194,13 +115,9 @@ struct BaremetalArgs {
     #[arg(long)]
     script_only: bool,
 
-    /// Platform domain (e.g., tengu.to)
+    /// Remove Tengu and all installed dependencies from the server
     #[arg(long)]
-    domain_platform: Option<String>,
-
-    /// Apps domain (e.g., tengu.host)
-    #[arg(long)]
-    domain_apps: Option<String>,
+    remove: bool,
 
     /// Cloudflare API key
     #[arg(long)]
@@ -214,17 +131,64 @@ struct BaremetalArgs {
     #[arg(long)]
     resend_api_key: Option<String>,
 
-    /// Notification email
-    #[arg(long)]
-    notify_email: Option<String>,
+    /// Platform domain
+    #[arg(long, default_value = None)]
+    domain_platform: Option<String>,
+
+    /// Apps domain
+    #[arg(long, default_value = None)]
+    domain_apps: Option<String>,
 
     /// SSH public key
     #[arg(long)]
     ssh_key: Option<String>,
 
+    /// Notification email
+    #[arg(long)]
+    notify_email: Option<String>,
+
     /// Tengu release tag
     #[arg(long)]
     release: Option<String>,
+
+    /// Config file path
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+
+    /// Show config file path and exit
+    #[arg(long)]
+    show_config: bool,
+
+    /// Show config without provisioning
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Force recreation (Hetzner only)
+    #[arg(short, long)]
+    force: bool,
+
+    // -- Hetzner-specific options (only relevant with --hetzner) --
+    /// Server name (Hetzner only)
+    #[arg(short, long)]
+    name: Option<String>,
+
+    /// Server type (Hetzner only)
+    #[arg(short = 't', long)]
+    server_type: Option<String>,
+
+    /// Datacenter location (Hetzner only)
+    #[arg(short, long)]
+    location: Option<String>,
+
+    /// Ubuntu image (Hetzner only)
+    #[arg(long)]
+    image: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Show generated provisioning config
+    Show(ShowArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -243,12 +207,8 @@ enum OutputFormat {
     Bash,
 }
 
-/// Resolved configuration (config file + CLI args + env vars merged)
+/// Resolved provisioning configuration (all credentials present)
 struct ResolvedConfig {
-    name: String,
-    server_type: String,
-    location: String,
-    image: String,
     domain_platform: String,
     domain_apps: String,
     cf_api_key: String,
@@ -257,6 +217,14 @@ struct ResolvedConfig {
     notify_email: String,
     ssh_key: String,
     release: String,
+}
+
+/// Hetzner-specific parameters (separate from provisioning config)
+struct HetznerParams {
+    name: String,
+    server_type: String,
+    location: String,
+    image: String,
 }
 
 /// Config path - uses same XDG-style path as main tengu config
@@ -283,6 +251,259 @@ fn load_config(path: Option<&PathBuf>) -> Result<Config> {
     }
 }
 
+/// Detect default SSH public key from common locations
+fn detect_ssh_key() -> Option<String> {
+    let home = env::var("HOME").ok()?;
+    let candidates = [
+        format!("{home}/.ssh/id_ed25519.pub"),
+        format!("{home}/.ssh/id_rsa.pub"),
+    ];
+    for path in &candidates {
+        if let Ok(content) = fs::read_to_string(path) {
+            let key = content.trim().to_string();
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
+    }
+    None
+}
+
+/// Check if cloudflared cert.pem exists
+fn cloudflared_cert_exists() -> bool {
+    let home = env::var("HOME").unwrap_or_default();
+    PathBuf::from(home)
+        .join(".cloudflared")
+        .join("cert.pem")
+        .exists()
+}
+
+/// Run `cloudflared tunnel login` interactively
+fn run_cloudflared_login() -> Result<()> {
+    println!(
+        "\n{} Cloudflare tunnel authentication required.",
+        style("*").cyan()
+    );
+    println!("  A browser window will open for authentication...\n");
+
+    let status = Command::new("cloudflared")
+        .args(["tunnel", "login"])
+        .status()
+        .context("Failed to run cloudflared - is it installed?")?;
+
+    if !status.success() {
+        bail!("cloudflared tunnel login failed");
+    }
+
+    println!("  {} Cloudflare tunnel authenticated\n", style("v").green());
+    Ok(())
+}
+
+/// Resolve configuration interactively
+///
+/// Priority: CLI args > env vars > config file > interactive prompt > defaults
+#[allow(clippy::too_many_lines)]
+fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
+    // Print header for interactive section
+    let needs_interactive = args.cf_email.is_none()
+        && env::var("CF_EMAIL").is_err()
+        && config.cloudflare.email.is_none();
+
+    if needs_interactive {
+        println!(
+            "\n{}",
+            style("--- Tengu Init \u{2014} Credential Setup ---")
+                .cyan()
+                .bold()
+        );
+        println!();
+    }
+
+    // 1. Cloudflare email
+    let cf_email = args
+        .cf_email
+        .clone()
+        .or_else(|| env::var("CF_EMAIL").ok())
+        .or_else(|| config.cloudflare.email.clone())
+        .map_or_else(
+            || {
+                Input::<String>::new()
+                    .with_prompt("Cloudflare email")
+                    .validate_with(|input: &String| {
+                        if input.contains('@') && input.contains('.') {
+                            Ok(())
+                        } else {
+                            Err("Please enter a valid email address")
+                        }
+                    })
+                    .interact_text()
+                    .context("Failed to read Cloudflare email")
+            },
+            Ok,
+        )?;
+
+    // 2. Cloudflare API key
+    let cf_api_key = args
+        .cf_api_key
+        .clone()
+        .or_else(|| env::var("CF_API_KEY").ok())
+        .or_else(|| config.cloudflare.api_key.clone())
+        .map_or_else(
+            || {
+                Password::new()
+                    .with_prompt("Cloudflare API key")
+                    .interact()
+                    .context("Failed to read Cloudflare API key")
+            },
+            Ok,
+        )?;
+
+    // 3. Cloudflare Tunnel auth - check for cert.pem
+    if !cloudflared_cert_exists() {
+        run_cloudflared_login()?;
+    }
+
+    // 4. Resend API key
+    let resend_api_key = args
+        .resend_api_key
+        .clone()
+        .or_else(|| env::var("RESEND_API_KEY").ok())
+        .or_else(|| config.resend.api_key.clone())
+        .map_or_else(
+            || {
+                Password::new()
+                    .with_prompt("Resend API key")
+                    .interact()
+                    .context("Failed to read Resend API key")
+            },
+            Ok,
+        )?;
+
+    // 5. Platform domain
+    let domain_platform = args
+        .domain_platform
+        .clone()
+        .or_else(|| config.domains.platform.clone())
+        .map_or_else(
+            || {
+                Input::<String>::new()
+                    .with_prompt("Platform domain")
+                    .default("tengu.to".into())
+                    .interact_text()
+                    .context("Failed to read platform domain")
+            },
+            Ok,
+        )?;
+
+    // 6. Apps domain
+    let domain_apps = args
+        .domain_apps
+        .clone()
+        .or_else(|| config.domains.apps.clone())
+        .map_or_else(
+            || {
+                Input::<String>::new()
+                    .with_prompt("Apps domain")
+                    .default("tengu.host".into())
+                    .interact_text()
+                    .context("Failed to read apps domain")
+            },
+            Ok,
+        )?;
+
+    // 7. SSH public key
+    let detected_key = detect_ssh_key();
+    let ssh_key = args
+        .ssh_key
+        .clone()
+        .or_else(|| env::var("SSH_PUBLIC_KEY").ok())
+        .or_else(|| config.ssh.public_key.clone())
+        .map_or_else(
+            || {
+                let prompt = Input::<String>::new().with_prompt("SSH public key");
+                let prompt = if let Some(ref key) = detected_key {
+                    prompt.default(key.clone())
+                } else {
+                    prompt
+                };
+                prompt
+                    .interact_text()
+                    .context("Failed to read SSH public key")
+            },
+            Ok,
+        )?;
+
+    // 8. Notification email (default: CF email)
+    let notify_email = args
+        .notify_email
+        .clone()
+        .or_else(|| config.notifications.email.clone())
+        .map_or_else(
+            || {
+                Input::<String>::new()
+                    .with_prompt("Notification email")
+                    .default(cf_email.clone())
+                    .interact_text()
+                    .context("Failed to read notification email")
+            },
+            Ok,
+        )?;
+
+    // 9. Tengu release
+    let release = args
+        .release
+        .clone()
+        .or_else(|| config.server.release.clone())
+        .map_or_else(
+            || {
+                Input::<String>::new()
+                    .with_prompt("Tengu release")
+                    .default(DEFAULT_RELEASE.into())
+                    .interact_text()
+                    .context("Failed to read release tag")
+            },
+            Ok,
+        )?;
+
+    Ok(ResolvedConfig {
+        domain_platform,
+        domain_apps,
+        cf_api_key,
+        cf_email,
+        resend_api_key,
+        notify_email,
+        ssh_key,
+        release,
+    })
+}
+
+/// Resolve Hetzner-specific parameters
+fn resolve_hetzner_params(args: &Args, config: &Config) -> HetznerParams {
+    HetznerParams {
+        name: args
+            .name
+            .clone()
+            .or_else(|| config.server.name.clone())
+            .unwrap_or_else(|| "tengu".to_string()),
+        server_type: args
+            .server_type
+            .clone()
+            .or_else(|| config.server.server_type.clone())
+            .unwrap_or_else(|| "cax41".to_string()),
+        location: args
+            .location
+            .clone()
+            .or_else(|| config.server.location.clone())
+            .unwrap_or_else(|| "hel1".to_string()),
+        image: args
+            .image
+            .clone()
+            .or_else(|| config.server.image.clone())
+            .unwrap_or_else(|| "ubuntu-24.04".to_string()),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -298,74 +519,55 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Load config file
-    let file_config = load_config(args.config.as_ref())?;
-
-    // Route to appropriate subcommand
-    match args.command {
-        Some(Commands::Hetzner(hetzner_args)) => run_hetzner(&hetzner_args, &file_config),
-        Some(Commands::Baremetal(baremetal_args)) => run_baremetal(&baremetal_args, &file_config),
-        Some(Commands::Show(show_args)) => run_show(&show_args, &file_config),
-        None => {
-            // Default: run Hetzner with default args (interactive mode)
-            run_hetzner(&HetznerArgs::default(), &file_config)
-        }
-    }
-}
-
-/// Default implementation for `HetznerArgs`
-impl Default for HetznerArgs {
-    fn default() -> Self {
-        Self {
-            name: None,
-            server_type: None,
-            location: None,
-            image: None,
-            domain_platform: None,
-            domain_apps: None,
-            cf_api_key: None,
-            cf_email: None,
-            resend_api_key: None,
-            notify_email: None,
-            ssh_key: None,
-            release: None,
-            force: false,
-            dry_run: false,
-        }
-    }
-}
-
-/// Run Hetzner provisioning
-fn run_hetzner(args: &HetznerArgs, config: &Config) -> Result<()> {
-    // Resolve final configuration
-    let resolved = resolve_hetzner_config(args, config)?;
-
-    // Print banner
-    print_banner();
-
-    // Get server type info
-    let type_info = Hetzner::server_type_info(&resolved.server_type)?;
-
-    // Print configuration table
-    print_config_table(&resolved, &type_info);
-
-    if args.dry_run {
-        println!("\n{} Dry run - not creating server", style("i").cyan());
-        print_cloud_init_preview(&resolved)?;
-        return Ok(());
+    // Route show subcommand
+    if let Some(Commands::Show(show_args)) = &args.command {
+        let file_config = load_config(args.config.as_ref())?;
+        return run_show(show_args, &file_config);
     }
 
-    // Check if server exists
-    if Hetzner::server_exists(&resolved.name)? {
-        println!(
-            "\n{} Server '{}' already exists",
-            style("!").yellow(),
-            resolved.name
+    // Validate: need either host or --hetzner
+    if args.host.is_none() && !args.hetzner {
+        bail!(
+            "Missing SSH destination. Usage:\n  \
+             tengu-init user@host          Provision existing server\n  \
+             tengu-init --hetzner          Create Hetzner VPS and provision"
         );
+    }
+
+    // Handle --remove: uninstall everything from the target server
+    if args.remove {
+        let host = args.host.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("--remove requires a host argument: tengu-init user@host --remove")
+        })?;
+
+        println!();
+        println!(
+            "{}",
+            style("╔═══════════════════════════════════════╗")
+                .red()
+                .bold()
+        );
+        println!(
+            "{}",
+            style("║          TENGU REMOVAL                ║")
+                .red()
+                .bold()
+        );
+        println!(
+            "{}",
+            style("╚═══════════════════════════════════════╝")
+                .red()
+                .bold()
+        );
+        println!(
+            "\nThis will remove Tengu and all installed dependencies from {}",
+            style(host).cyan()
+        );
+        println!("Including: tengu, caddy, ollama, postgresql, docker, fail2ban\n");
 
         if !args.force {
             let confirm = dialoguer::Confirm::new()
-                .with_prompt("Delete and recreate?")
+                .with_prompt("Are you sure?")
                 .default(false)
                 .interact()?;
 
@@ -375,54 +577,129 @@ fn run_hetzner(args: &HetznerArgs, config: &Config) -> Result<()> {
             }
         }
 
-        Hetzner::delete_server(&resolved.name)?;
+        if args.script_only {
+            println!("{}", Baremetal::generate_removal_script());
+            return Ok(());
+        }
+
+        let provider = Baremetal::new(host, args.port);
+        provider.remove()?;
+
+        return Ok(());
     }
 
-    // Generate cloud-init
-    println!("\n{GEAR} Generating cloud-init configuration...");
-    let cloud_init = render_cloud_init(&resolved)?;
+    // Load config file
+    let file_config = load_config(args.config.as_ref())?;
 
-    // Write to temp file
-    let temp_file = tempfile::Builder::new()
-        .prefix("cloud-init-")
-        .suffix(".yml")
-        .tempfile()?;
-    std::fs::write(temp_file.path(), &cloud_init)?;
+    // Resolve config (CLI > env > config > interactive > defaults)
+    let resolved = resolve_config(&args, &file_config)?;
 
-    // Create server
-    println!("\n{ROCKET} Creating server...");
-    let params = ServerParams {
-        name: &resolved.name,
-        server_type: &resolved.server_type,
-        image: &resolved.image,
-        location: &resolved.location,
-        cloud_init_path: temp_file.path(),
+    // Determine the SSH host
+    let host = if args.hetzner {
+        // Hetzner flow: create server first, get IP
+        let hetzner_params = resolve_hetzner_params(&args, &file_config);
+
+        print_banner();
+        print_hetzner_config_table(&resolved, &hetzner_params)?;
+
+        if args.dry_run {
+            println!("\n{} Dry run - not creating server", style("i").cyan());
+            print_cloud_init_preview(&resolved)?;
+            return Ok(());
+        }
+
+        // Check if server exists
+        if Hetzner::server_exists(&hetzner_params.name)? {
+            println!(
+                "\n{} Server '{}' already exists",
+                style("!").yellow(),
+                hetzner_params.name
+            );
+
+            if !args.force {
+                let confirm = dialoguer::Confirm::new()
+                    .with_prompt("Delete and recreate?")
+                    .default(false)
+                    .interact()?;
+
+                if !confirm {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            Hetzner::delete_server(&hetzner_params.name)?;
+        }
+
+        // Generate cloud-init
+        println!("\n{GEAR} Generating cloud-init configuration...");
+        let cloud_init = render_cloud_init(&resolved)?;
+
+        // Write to temp file
+        let temp_file = tempfile::Builder::new()
+            .prefix("cloud-init-")
+            .suffix(".yml")
+            .tempfile()?;
+        std::fs::write(temp_file.path(), &cloud_init)?;
+
+        // Create server
+        println!("\n{ROCKET} Creating server...");
+        let params = ServerParams {
+            name: &hetzner_params.name,
+            server_type: &hetzner_params.server_type,
+            image: &hetzner_params.image,
+            location: &hetzner_params.location,
+            cloud_init_path: temp_file.path(),
+        };
+        let ip = Hetzner::create_server(&params)?;
+
+        println!("  {} IP: {}", style("->").dim(), style(&ip).cyan());
+
+        // Remove old host key
+        Hetzner::clear_host_key(&ip);
+
+        // Wait for SSH
+        wait_for_ssh(&ip);
+
+        // Stream cloud-init progress
+        stream_cloud_init_logs(&ip)?;
+
+        // Print success
+        print_success(&resolved, &ip);
+
+        return Ok(());
+    } else {
+        // Direct SSH host provided
+        args.host.clone().unwrap()
     };
-    let ip = Hetzner::create_server(&params)?;
 
-    println!("  {} IP: {}", style("->").dim(), style(&ip).cyan());
+    // Extract user from host
+    let user = if let Some((u, _)) = host.split_once('@') {
+        u.to_string()
+    } else {
+        "chi".to_string()
+    };
 
-    // Remove old host key
-    Hetzner::clear_host_key(&ip);
+    // Build TenguConfig for baremetal provisioning
+    let tengu_config = TenguConfig::builder()
+        .user(user)
+        .domain_platform(&resolved.domain_platform)
+        .domain_apps(&resolved.domain_apps)
+        .cf_api_key(&resolved.cf_api_key)
+        .cf_email(&resolved.cf_email)
+        .resend_api_key(&resolved.resend_api_key)
+        .notify_email(&resolved.notify_email)
+        .ssh_keys(
+            if resolved.ssh_key.is_empty() {
+                vec![]
+            } else {
+                vec![resolved.ssh_key.clone()]
+            },
+        )
+        .release(&resolved.release)
+        .build();
 
-    // Wait for SSH
-    wait_for_ssh(&ip);
-
-    // Stream cloud-init progress
-    stream_cloud_init_logs(&ip)?;
-
-    // Print success
-    print_success(&resolved, &ip);
-
-    Ok(())
-}
-
-/// Run baremetal provisioning
-fn run_baremetal(args: &BaremetalArgs, config: &Config) -> Result<()> {
-    // Resolve configuration for provisioning
-    let tengu_config = resolve_tengu_config(args, config)?;
-
-    // Script-only mode: just output the script
+    // Script-only mode
     if args.script_only {
         let script = Baremetal::generate_script(&tengu_config)?;
         println!("{script}");
@@ -431,14 +708,21 @@ fn run_baremetal(args: &BaremetalArgs, config: &Config) -> Result<()> {
 
     // Print banner
     print_banner();
+    print_provision_config_table(&resolved);
+
+    if args.dry_run {
+        println!("\n{} Dry run - not provisioning", style("i").cyan());
+        return Ok(());
+    }
+
     println!(
         "\n{} Provisioning {} via SSH\n",
         style("*").cyan(),
-        style(&args.host).cyan()
+        style(&host).cyan()
     );
 
     // Create provider and provision
-    let provider = Baremetal::new(&args.host, args.port);
+    let provider = Baremetal::new(&host, args.port);
     provider.provision(&tengu_config)?;
 
     // Print success
@@ -537,214 +821,6 @@ fn run_show(args: &ShowArgs, config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Resolve Hetzner-specific configuration
-#[allow(clippy::unnecessary_wraps)]
-fn resolve_hetzner_config(args: &HetznerArgs, config: &Config) -> Result<ResolvedConfig> {
-    // Priority: CLI args > env vars > config file > defaults
-
-    let cf_api_key = args
-        .cf_api_key
-        .clone()
-        .or_else(|| env::var("CF_API_KEY").ok())
-        .or_else(|| config.cloudflare.api_key.clone());
-
-    let cf_email = args
-        .cf_email
-        .clone()
-        .or_else(|| env::var("CF_EMAIL").ok())
-        .or_else(|| config.cloudflare.email.clone());
-
-    let resend_api_key = args
-        .resend_api_key
-        .clone()
-        .or_else(|| env::var("RESEND_API_KEY").ok())
-        .or_else(|| config.resend.api_key.clone());
-
-    let ssh_key = args
-        .ssh_key
-        .clone()
-        .or_else(|| env::var("SSH_PUBLIC_KEY").ok())
-        .or_else(|| config.ssh.public_key.clone());
-
-    // Validate required fields
-    let missing: Vec<&str> = [
-        cf_api_key.is_none().then_some("cloudflare.api_key"),
-        cf_email.is_none().then_some("cloudflare.email"),
-        resend_api_key.is_none().then_some("resend.api_key"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
-    if !missing.is_empty() {
-        let config_path = config_path();
-        eprintln!(
-            "{} Missing required credentials: {}",
-            CROSS,
-            missing.join(", ")
-        );
-        eprintln!();
-        eprintln!(
-            "Add to config file: {}",
-            style(config_path.display()).cyan()
-        );
-        eprintln!();
-        eprintln!("  [cloudflare]");
-        eprintln!("  api_key = \"your-api-key\"");
-        eprintln!("  email = \"your-email\"");
-        eprintln!();
-        eprintln!("  [resend]");
-        eprintln!("  api_key = \"re_xxx\"");
-        std::process::exit(1);
-    }
-
-    Ok(ResolvedConfig {
-        name: args
-            .name
-            .clone()
-            .or_else(|| config.server.name.clone())
-            .unwrap_or_else(|| "tengu".to_string()),
-        server_type: args
-            .server_type
-            .clone()
-            .or_else(|| config.server.server_type.clone())
-            .unwrap_or_else(|| "cax41".to_string()),
-        location: args
-            .location
-            .clone()
-            .or_else(|| config.server.location.clone())
-            .unwrap_or_else(|| "hel1".to_string()),
-        image: args
-            .image
-            .clone()
-            .or_else(|| config.server.image.clone())
-            .unwrap_or_else(|| "ubuntu-24.04".to_string()),
-        domain_platform: args
-            .domain_platform
-            .clone()
-            .or_else(|| config.domains.platform.clone())
-            .unwrap_or_else(|| "tengu.to".to_string()),
-        domain_apps: args
-            .domain_apps
-            .clone()
-            .or_else(|| config.domains.apps.clone())
-            .unwrap_or_else(|| "tengu.host".to_string()),
-        cf_api_key: cf_api_key.unwrap(),
-        cf_email: cf_email.unwrap(),
-        resend_api_key: resend_api_key.unwrap(),
-        notify_email: args
-            .notify_email
-            .clone()
-            .or_else(|| config.notifications.email.clone())
-            .unwrap_or_else(|| "admin@example.com".to_string()),
-        ssh_key: ssh_key.unwrap_or_default(),
-        release: args
-            .release
-            .clone()
-            .or_else(|| config.server.release.clone())
-            .unwrap_or_else(|| DEFAULT_RELEASE.to_string()),
-    })
-}
-
-/// Resolve configuration for baremetal (returns `TenguConfig`)
-#[allow(clippy::unnecessary_wraps)]
-fn resolve_tengu_config(args: &BaremetalArgs, config: &Config) -> Result<TenguConfig> {
-    // Extract user from host (user@host format)
-    let user = if let Some((u, _)) = args.host.split_once('@') {
-        u.to_string()
-    } else {
-        "chi".to_string()
-    };
-
-    let cf_api_key = args
-        .cf_api_key
-        .clone()
-        .or_else(|| env::var("CF_API_KEY").ok())
-        .or_else(|| config.cloudflare.api_key.clone());
-
-    let cf_email = args
-        .cf_email
-        .clone()
-        .or_else(|| env::var("CF_EMAIL").ok())
-        .or_else(|| config.cloudflare.email.clone());
-
-    let resend_api_key = args
-        .resend_api_key
-        .clone()
-        .or_else(|| env::var("RESEND_API_KEY").ok())
-        .or_else(|| config.resend.api_key.clone());
-
-    let ssh_key = args
-        .ssh_key
-        .clone()
-        .or_else(|| env::var("SSH_PUBLIC_KEY").ok())
-        .or_else(|| config.ssh.public_key.clone());
-
-    // Validate required fields
-    let missing: Vec<&str> = [
-        cf_api_key.is_none().then_some("cloudflare.api_key"),
-        cf_email.is_none().then_some("cloudflare.email"),
-        resend_api_key.is_none().then_some("resend.api_key"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
-    if !missing.is_empty() {
-        let config_path = config_path();
-        eprintln!(
-            "{} Missing required credentials: {}",
-            CROSS,
-            missing.join(", ")
-        );
-        eprintln!();
-        eprintln!(
-            "Add to config file: {}",
-            style(config_path.display()).cyan()
-        );
-        eprintln!();
-        eprintln!("  [cloudflare]");
-        eprintln!("  api_key = \"your-api-key\"");
-        eprintln!("  email = \"your-email\"");
-        eprintln!();
-        eprintln!("  [resend]");
-        eprintln!("  api_key = \"re_xxx\"");
-        std::process::exit(1);
-    }
-
-    Ok(TenguConfig::builder()
-        .user(user)
-        .domain_platform(
-            args.domain_platform
-                .clone()
-                .or_else(|| config.domains.platform.clone())
-                .unwrap_or_else(|| "tengu.to".to_string()),
-        )
-        .domain_apps(
-            args.domain_apps
-                .clone()
-                .or_else(|| config.domains.apps.clone())
-                .unwrap_or_else(|| "tengu.host".to_string()),
-        )
-        .cf_api_key(cf_api_key.unwrap())
-        .cf_email(cf_email.unwrap())
-        .resend_api_key(resend_api_key.unwrap())
-        .notify_email(
-            args.notify_email
-                .clone()
-                .or_else(|| config.notifications.email.clone())
-                .unwrap_or_else(|| "admin@example.com".to_string()),
-        )
-        .ssh_keys(ssh_key.map(|k| vec![k]).unwrap_or_default())
-        .release(
-            args.release
-                .clone()
-                .or_else(|| config.server.release.clone())
-                .unwrap_or_else(|| DEFAULT_RELEASE.to_string()),
-        )
-        .build())
-}
-
 /// Print success for baremetal provisioning
 fn print_baremetal_success(config: &TenguConfig) {
     println!();
@@ -800,7 +876,7 @@ fn print_banner() {
     );
     println!(
         "{}",
-        style("║       TENGU CLOUD PROVISIONING        ║")
+        style("║          TENGU PROVISIONING           ║")
             .cyan()
             .bold()
     );
@@ -812,8 +888,11 @@ fn print_banner() {
     );
 }
 
-fn print_config_table(cfg: &ResolvedConfig, type_info: &str) {
-    println!("\n{} Configuration\n", style("▸").blue().bold());
+/// Print config table for Hetzner flow (includes server type info)
+fn print_hetzner_config_table(cfg: &ResolvedConfig, hetzner: &HetznerParams) -> Result<()> {
+    let type_info = Hetzner::server_type_info(&hetzner.server_type)?;
+
+    println!("\n{} Configuration\n", style("v").blue().bold());
 
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
@@ -822,13 +901,42 @@ fn print_config_table(cfg: &ResolvedConfig, type_info: &str) {
         Cell::new("Value").fg(Color::Cyan),
     ]);
 
-    table.add_row(vec!["Name", &cfg.name]);
+    table.add_row(vec!["Name", &hetzner.name]);
     table.add_row(vec![
         "Type",
-        &format!("{} ({})", cfg.server_type, type_info),
+        &format!("{} ({})", hetzner.server_type, type_info),
     ]);
-    table.add_row(vec!["Location", &cfg.location]);
-    table.add_row(vec!["Image", &cfg.image]);
+    table.add_row(vec!["Location", &hetzner.location]);
+    table.add_row(vec!["Image", &hetzner.image]);
+    table.add_row(vec!["Cloudflare", &cfg.cf_email]);
+    table.add_row(vec![
+        "Resend",
+        &format!(
+            "{}...",
+            &cfg.resend_api_key[..12.min(cfg.resend_api_key.len())]
+        ),
+    ]);
+    table.add_row(vec![
+        "Domains",
+        &format!("{}, {}", cfg.domain_platform, cfg.domain_apps),
+    ]);
+    table.add_row(vec!["Release", &cfg.release]);
+
+    println!("{table}");
+    Ok(())
+}
+
+/// Print config table for baremetal/SSH flow
+fn print_provision_config_table(cfg: &ResolvedConfig) {
+    println!("\n{} Configuration\n", style("v").blue().bold());
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL_CONDENSED);
+    table.set_header(vec![
+        Cell::new("Setting").fg(Color::Cyan),
+        Cell::new("Value").fg(Color::Cyan),
+    ]);
+
     table.add_row(vec!["Cloudflare", &cfg.cf_email]);
     table.add_row(vec![
         "Resend",
@@ -919,8 +1027,8 @@ fn wait_for_ssh(ip: &str) {
 }
 
 fn stream_cloud_init_logs(ip: &str) -> Result<()> {
-    println!("\n{}", style("─".repeat(50)).dim());
-    println!("{} Cloud-init progress:\n", style("▸").cyan());
+    println!("\n{}", style("-".repeat(50)).dim());
+    println!("{} Cloud-init progress:\n", style("v").cyan());
 
     let mut child = Command::new("ssh")
         .args([
@@ -959,7 +1067,7 @@ fn stream_cloud_init_logs(ip: &str) -> Result<()> {
     }
 
     let _ = child.wait();
-    println!("\n{}", style("─".repeat(50)).dim());
+    println!("\n{}", style("-".repeat(50)).dim());
     Ok(())
 }
 

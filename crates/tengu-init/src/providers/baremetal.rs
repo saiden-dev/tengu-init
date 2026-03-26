@@ -57,6 +57,212 @@ impl Baremetal {
             .map_err(|e| anyhow::anyhow!("Failed to render script: {e:?}"))
     }
 
+    /// Generate a removal script that undoes everything tengu-init installed
+    pub fn generate_removal_script() -> String {
+        r#"#!/bin/bash
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+step=0
+total=12
+
+progress() {
+    step=$((step + 1))
+    echo -e "${YELLOW}[$step/$total]${NC} $1"
+}
+
+echo ""
+echo -e "${RED}╔═══════════════════════════════════════╗${NC}"
+echo -e "${RED}║        TENGU REMOVAL IN PROGRESS      ║${NC}"
+echo -e "${RED}╚═══════════════════════════════════════╝${NC}"
+echo ""
+
+# Phase 1: Stop services
+progress "Stopping tengu service..."
+systemctl stop tengu 2>/dev/null || true
+systemctl disable tengu 2>/dev/null || true
+
+progress "Stopping caddy service..."
+systemctl stop caddy 2>/dev/null || true
+systemctl disable caddy 2>/dev/null || true
+
+progress "Stopping ollama service..."
+systemctl stop ollama 2>/dev/null || true
+systemctl disable ollama 2>/dev/null || true
+
+progress "Stopping PostgreSQL service..."
+systemctl stop postgresql 2>/dev/null || true
+systemctl disable postgresql 2>/dev/null || true
+
+progress "Stopping Docker services..."
+systemctl stop docker 2>/dev/null || true
+systemctl stop docker.socket 2>/dev/null || true
+systemctl disable docker 2>/dev/null || true
+systemctl disable docker.socket 2>/dev/null || true
+
+progress "Stopping fail2ban service..."
+systemctl stop fail2ban 2>/dev/null || true
+systemctl disable fail2ban 2>/dev/null || true
+
+# Phase 2: Remove packages
+progress "Removing tengu package..."
+dpkg --purge tengu 2>/dev/null || true
+
+progress "Removing tengu-caddy package..."
+dpkg --purge tengu-caddy 2>/dev/null || true
+
+progress "Removing installed packages..."
+export DEBIAN_FRONTEND=noninteractive
+apt-get purge -y \
+    ollama \
+    postgresql-16 postgresql-16-pgvector \
+    docker.io docker-compose \
+    fail2ban \
+    2>/dev/null || true
+apt-get autoremove -y 2>/dev/null || true
+
+# Phase 3: Remove config and data directories
+progress "Removing Tengu configuration and data..."
+rm -rf /etc/tengu
+rm -rf /var/lib/tengu
+rm -rf /var/log/tengu
+rm -rf /etc/caddy/sites
+rm -f /etc/caddy/Caddyfile
+rm -f /etc/fail2ban/jail.local
+rm -rf /etc/systemd/system/caddy.service.d
+
+# Phase 4: Reset firewall
+progress "Resetting firewall rules..."
+ufw --force reset 2>/dev/null || true
+ufw disable 2>/dev/null || true
+
+# Phase 5: Remove APT repositories added during install
+progress "Cleaning up APT repositories..."
+rm -f /etc/apt/sources.list.d/pgdg.list
+rm -f /usr/share/keyrings/postgresql-archive-keyring.gpg
+apt-get update -qq 2>/dev/null || true
+
+systemctl daemon-reload
+
+echo ""
+echo -e "${GREEN}╔═══════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║          REMOVAL COMPLETE             ║${NC}"
+echo -e "${GREEN}╚═══════════════════════════════════════╝${NC}"
+echo ""
+echo -e "All Tengu components have been removed."
+echo -e "Base packages (curl, git, etc.) were left intact."
+echo ""
+"#
+        .to_string()
+    }
+
+    /// Remove Tengu and all installed dependencies from the server
+    pub fn remove(&self) -> Result<()> {
+        let script = Self::generate_removal_script();
+
+        // Wait for SSH
+        self.wait_for_ssh()?;
+
+        // Upload removal script
+        println!(
+            "{} Uploading removal script to {}...",
+            style("*").cyan(),
+            self.ssh_destination()
+        );
+        self.upload_removal_script(&script)?;
+
+        // Execute
+        println!("{} Executing removal...\n", style("*").cyan());
+        self.execute_removal()?;
+
+        // Cleanup
+        self.cleanup_removal_script()?;
+
+        Ok(())
+    }
+
+    /// Upload the removal script
+    fn upload_removal_script(&self, script: &str) -> Result<()> {
+        let mut args = self.ssh_args();
+        args.push(self.ssh_destination());
+        args.push("cat > /tmp/tengu-remove.sh && chmod +x /tmp/tengu-remove.sh".into());
+
+        let mut child = Command::new("ssh")
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to start SSH for upload")?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(script.as_bytes())
+                .context("Failed to write script to SSH")?;
+        }
+
+        let output = child
+            .wait_with_output()
+            .context("Failed to upload removal script")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to upload removal script: {stderr}");
+        }
+
+        Ok(())
+    }
+
+    /// Execute the removal script with live output
+    fn execute_removal(&self) -> Result<()> {
+        let mut args = self.ssh_args();
+        args.push(self.ssh_destination());
+        args.push("sudo /tmp/tengu-remove.sh".into());
+
+        let mut child = Command::new("ssh")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("Failed to execute removal script")?;
+
+        let stdout = child.stdout.take().context("No stdout")?;
+        let reader = BufReader::new(stdout);
+
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            println!("  {line}");
+        }
+
+        let status = child.wait().context("Failed to wait for removal script")?;
+
+        if !status.success() {
+            bail!("Removal script failed with exit code: {status}");
+        }
+
+        Ok(())
+    }
+
+    /// Remove the temporary removal script
+    #[allow(clippy::unnecessary_wraps)]
+    fn cleanup_removal_script(&self) -> Result<()> {
+        let mut args = self.ssh_args();
+        args.push(self.ssh_destination());
+        args.push("rm -f /tmp/tengu-remove.sh".into());
+
+        let _ = Command::new("ssh")
+            .args(&args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        Ok(())
+    }
+
     /// Provision the server
     ///
     /// 1. Generate bash script from config
