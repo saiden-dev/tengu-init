@@ -4,6 +4,7 @@
 //! and executes it with real-time progress streaming.
 
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -11,6 +12,14 @@ use anyhow::{Context, Result, bail};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 use tengu_provision::{BashRenderer, Manifest, Renderer, TenguConfig};
+
+/// Configuration for Cloudflare Tunnel setup
+pub struct TunnelConfig {
+    /// The platform domain (e.g., "tengu.to")
+    pub domain_platform: String,
+    /// The tunnel name (e.g., "tengu")
+    pub tunnel_name: String,
+}
 
 /// Baremetal server provisioning via SSH
 pub struct Baremetal {
@@ -68,7 +77,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 step=0
-total=12
+total=15
 
 progress() {
     step=$((step + 1))
@@ -80,6 +89,19 @@ echo -e "${RED}╔════════════════════�
 echo -e "${RED}║        TENGU REMOVAL IN PROGRESS      ║${NC}"
 echo -e "${RED}╚═══════════════════════════════════════╝${NC}"
 echo ""
+
+# Phase 0: Cloudflare Tunnel cleanup
+progress "Stopping cloudflared service..."
+sudo systemctl stop cloudflared 2>/dev/null || true
+sudo systemctl disable cloudflared 2>/dev/null || true
+sudo cloudflared service uninstall 2>/dev/null || true
+
+progress "Deleting cloudflare tunnel..."
+cloudflared tunnel delete tengu 2>/dev/null || true
+
+progress "Removing cloudflared..."
+sudo dpkg --purge cloudflared 2>/dev/null || true
+rm -rf ~/.cloudflared
 
 # Phase 1: Stop services
 progress "Stopping tengu service..."
@@ -299,6 +321,205 @@ echo ""
         // Cleanup
         println!("{} Cleaning up...", style("*").cyan());
         self.cleanup_script()?;
+
+        Ok(())
+    }
+
+    /// Set up a Cloudflare Tunnel on the remote server
+    ///
+    /// Steps:
+    /// 1. Install cloudflared (from GitHub .deb release)
+    /// 2. Upload local cert.pem to remote
+    /// 3. Delete any existing tunnel with the given name
+    /// 4. Create a new tunnel and capture its ID
+    /// 5. Write the tunnel config.yml
+    /// 6. Create DNS CNAME routes for subdomains
+    /// 7. Install and start cloudflared as a systemd service
+    pub fn setup_tunnel(&self, tunnel_config: &TunnelConfig) -> Result<()> {
+        let home = format!("/home/{}", self.user);
+        let cf_dir = format!("{home}/.cloudflared");
+
+        // Step 1: Install cloudflared
+        println!(
+            "\n{} Installing cloudflared...",
+            style("*").cyan()
+        );
+        self.run_ssh_command(
+            "if command -v cloudflared >/dev/null 2>&1; then \
+                echo 'cloudflared already installed'; \
+            else \
+                ARCH=$(dpkg --print-architecture) && \
+                curl -fsSL -o /tmp/cloudflared.deb \
+                    \"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb\" && \
+                sudo dpkg -i /tmp/cloudflared.deb && \
+                rm -f /tmp/cloudflared.deb; \
+            fi",
+        )?;
+        println!("  {} cloudflared installed", style("v").green());
+
+        // Step 2: Upload cert.pem
+        println!(
+            "{} Uploading Cloudflare tunnel credentials...",
+            style("*").cyan()
+        );
+        let local_cert = PathBuf::from(std::env::var("HOME").unwrap_or_default())
+            .join(".cloudflared")
+            .join("cert.pem");
+        if !local_cert.exists() {
+            bail!(
+                "Local cert.pem not found at {}. Run 'cloudflared tunnel login' first.",
+                local_cert.display()
+            );
+        }
+        let cert_content = std::fs::read_to_string(&local_cert)
+            .context("Failed to read local cert.pem")?;
+
+        // Create remote .cloudflared dir and write cert.pem
+        self.run_ssh_command(&format!("mkdir -p {cf_dir}"))?;
+        self.upload_file_content(&cert_content, &format!("{cf_dir}/cert.pem"))?;
+        println!("  {} cert.pem uploaded", style("v").green());
+
+        // Step 3: Delete existing tunnel
+        println!(
+            "{} Configuring tunnel '{}'...",
+            style("*").cyan(),
+            tunnel_config.tunnel_name
+        );
+        self.run_ssh_command(&format!(
+            "cloudflared tunnel delete {} 2>/dev/null || true",
+            tunnel_config.tunnel_name
+        ))?;
+
+        // Step 4: Create tunnel and capture ID
+        let create_output = self.run_ssh_command_output(&format!(
+            "cloudflared tunnel create {}",
+            tunnel_config.tunnel_name
+        ))?;
+
+        let tunnel_id = parse_tunnel_id(&create_output)
+            .context("Failed to parse tunnel ID from cloudflared output")?;
+        println!("  {} Tunnel created (ID: {})", style("v").green(), &tunnel_id[..8]);
+
+        // Step 5: Write config.yml
+        let config_yml = format!(
+            "tunnel: {tunnel_id}\n\
+             credentials-file: {cf_dir}/{tunnel_id}.json\n\
+             \n\
+             ingress:\n\
+             \x20 - hostname: api.{domain}\n\
+             \x20   service: http://localhost:8080\n\
+             \x20 - hostname: docs.{domain}\n\
+             \x20   service: http://localhost:8080\n\
+             \x20 - hostname: git.{domain}\n\
+             \x20   service: http://localhost:8080\n\
+             \x20 - hostname: ssh.{domain}\n\
+             \x20   service: ssh://localhost:2222\n\
+             \x20 - service: http_status:404\n",
+            domain = tunnel_config.domain_platform,
+        );
+        self.upload_file_content(&config_yml, &format!("{cf_dir}/config.yml"))?;
+        println!("  {} config.yml written", style("v").green());
+
+        // Step 6: Create DNS routes
+        println!(
+            "{} Creating DNS routes...",
+            style("*").cyan()
+        );
+        for subdomain in &["api", "docs", "git", "ssh"] {
+            let hostname = format!("{subdomain}.{}", tunnel_config.domain_platform);
+            self.run_ssh_command(&format!(
+                "cloudflared tunnel route dns {} {}",
+                tunnel_config.tunnel_name, hostname
+            ))?;
+            println!("  {} {}", style("v").green(), hostname);
+        }
+
+        // Step 7: Install systemd service and start
+        println!(
+            "{} Installing cloudflared service...",
+            style("*").cyan()
+        );
+        self.run_ssh_command(&format!(
+            "sudo cloudflared --config {cf_dir}/config.yml service install && \
+             sudo systemctl enable --now cloudflared"
+        ))?;
+        println!("  {} Cloudflare Tunnel ready", style("v").green());
+
+        Ok(())
+    }
+
+    /// Run a command on the remote server via SSH (discard output)
+    fn run_ssh_command(&self, command: &str) -> Result<()> {
+        let mut args = self.ssh_args();
+        args.push(self.ssh_destination());
+        args.push(command.to_string());
+
+        let output = Command::new("ssh")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .context("Failed to execute SSH command")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            bail!("SSH command failed: {command}\nstdout: {stdout}\nstderr: {stderr}");
+        }
+
+        Ok(())
+    }
+
+    /// Run a command on the remote server via SSH and return stdout
+    fn run_ssh_command_output(&self, command: &str) -> Result<String> {
+        let mut args = self.ssh_args();
+        args.push(self.ssh_destination());
+        args.push(command.to_string());
+
+        let output = Command::new("ssh")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .context("Failed to execute SSH command")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            bail!("SSH command failed: {command}\nstdout: {stdout}\nstderr: {stderr}");
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// Upload file content to a remote path via SSH stdin
+    fn upload_file_content(&self, content: &str, remote_path: &str) -> Result<()> {
+        let mut args = self.ssh_args();
+        args.push(self.ssh_destination());
+        args.push(format!("cat > {remote_path}"));
+
+        let mut child = Command::new("ssh")
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to start SSH for file upload")?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(content.as_bytes())
+                .context("Failed to write file content to SSH")?;
+        }
+
+        let output = child
+            .wait_with_output()
+            .context("Failed to upload file")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to upload to {remote_path}: {stderr}");
+        }
 
         Ok(())
     }
@@ -565,6 +786,18 @@ fn parse_progress_marker(line: &str) -> Option<ProgressMarker> {
         "COMPLETE" => Some(ProgressMarker::Complete { _total: step }),
         _ => None,
     }
+}
+
+/// Parse tunnel ID (UUID) from `cloudflared tunnel create` output
+///
+/// The output contains a line like: "Created tunnel tengu with id abcdef12-3456-7890-abcd-ef1234567890"
+fn parse_tunnel_id(output: &str) -> Option<String> {
+    let uuid_re = regex::Regex::new(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    )
+    .ok()?;
+
+    uuid_re.find(output).map(|m| m.as_str().to_string())
 }
 
 /// Strip ANSI escape codes from a string

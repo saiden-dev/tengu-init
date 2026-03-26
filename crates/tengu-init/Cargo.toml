@@ -31,6 +31,9 @@ indicatif.workspace = true
 # Templating
 tera.workspace = true
 
+# Regex
+regex.workspace = true
+
 # Temp files
 tempfile.workspace = true
 

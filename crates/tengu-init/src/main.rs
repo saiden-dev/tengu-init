@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tengu_provision::{BashRenderer, CloudInitRenderer, Manifest, Renderer, TenguConfig};
 use tera::Tera;
 
-use providers::{Baremetal, Hetzner, hetzner::ServerParams};
+use providers::{Baremetal, Hetzner, TunnelConfig, hetzner::ServerParams};
 
 static LOOKING_GLASS: Emoji<'_, '_> = Emoji("🔍 ", "");
 static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
@@ -724,6 +724,13 @@ fn main() -> Result<()> {
     // Create provider and provision
     let provider = Baremetal::new(&host, args.port);
     provider.provision(&tengu_config)?;
+
+    // Set up Cloudflare Tunnel
+    let tunnel_config = TunnelConfig {
+        domain_platform: resolved.domain_platform.clone(),
+        tunnel_name: "tengu".to_string(),
+    };
+    provider.setup_tunnel(&tunnel_config)?;
 
     // Print success
     print_baremetal_success(&tengu_config);

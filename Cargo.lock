@@ -1092,6 +1092,7 @@ dependencies = [
  "console",
  "dialoguer",
  "indicatif",
+ "regex",
  "serde",
  "tempfile",
  "tengu-provision",

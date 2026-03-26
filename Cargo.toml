@@ -34,6 +34,9 @@ tera = "1"
 # Temp files
 tempfile = "3"
 
+# Regex
+regex = "1"
+
 # Crypto (for checksums)
 sha2 = "0.10"
 hex = "0.4"
