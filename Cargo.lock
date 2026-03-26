@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "tengu-init"
-version = "0.2.1"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1101,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "tengu-provision"
-version = "0.2.1"
+version = "0.2.3"
 dependencies = [
  "base64",
  "hex",

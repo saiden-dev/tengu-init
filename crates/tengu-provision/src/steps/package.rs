@@ -101,7 +101,7 @@ impl Step for InstallPackage {
             ));
             cmds.push(format!(
                 "if ! grep -q '{}' /etc/apt/sources.list.d/*.list 2>/dev/null; then \
-                    echo '{}' > /etc/apt/sources.list.d/{}.list; \
+                    echo \"{}\" > /etc/apt/sources.list.d/{}.list; \
                     apt-get update; \
                 fi",
                 repo.repo_line, repo.repo_line, self.name
@@ -110,7 +110,7 @@ impl Step for InstallPackage {
 
         // Idempotent install
         cmds.push(format!(
-            "dpkg -s {} >/dev/null 2>&1 || apt-get install -y {}",
+            "dpkg -s {} 2>/dev/null | grep -q '^Status: install ok installed' || apt-get install -y {}",
             self.name, self.name
         ));
 
@@ -118,7 +118,10 @@ impl Step for InstallPackage {
     }
 
     fn check_command(&self) -> Option<String> {
-        Some(format!("dpkg -s {} >/dev/null 2>&1", self.name))
+        Some(format!(
+            "dpkg -s {} 2>/dev/null | grep -q '^Status: install ok installed'",
+            self.name
+        ))
     }
 }
 
@@ -168,7 +171,7 @@ impl InstallDebFromUrl {
     pub fn tengu_caddy() -> Self {
         Self::new(
             "tengu-caddy",
-            "https://github.com/tengu-apps/tengu-caddy/releases/latest/download/tengu-caddy_2.10.2-1_{arch}.deb",
+            "https://github.com/tengu-apps/tengu-caddy/releases/latest/download/tengu-caddy_2.11.2-1_{arch}.deb",
         )
     }
 }
@@ -193,7 +196,7 @@ impl Step for InstallDebFromUrl {
     ARCH=$(dpkg --print-architecture)
     URL=$(echo '{url}' | sed "s/{{arch}}/$ARCH/g")
     wget -q "$URL" -O /tmp/{name}.deb
-    dpkg -i /tmp/{name}.deb || apt-get install -f -y
+    dpkg -i --force-confold /tmp/{name}.deb || apt-get install -f -y
     rm -f /tmp/{name}.deb
 fi"#,
             check = check,
@@ -212,7 +215,7 @@ fi"#,
             r#"ARCH=$(dpkg --print-architecture)
 URL=$(echo '{url}' | sed "s/{{arch}}/$ARCH/g")
 wget -q "$URL" -O /tmp/{name}.deb
-dpkg -i /tmp/{name}.deb || apt-get install -f -y
+dpkg -i --force-confold /tmp/{name}.deb || apt-get install -f -y
 rm -f /tmp/{name}.deb"#,
             url = self.url_template,
             name = self.name
@@ -222,6 +225,9 @@ rm -f /tmp/{name}.deb"#,
     fn check_command(&self) -> Option<String> {
         self.custom_check
             .clone()
-            .or_else(|| Some(format!("dpkg -s {} >/dev/null 2>&1", self.name)))
+            .or_else(|| Some(format!(
+                "dpkg -s {} 2>/dev/null | grep -q '^Status: install ok installed'",
+                self.name
+            )))
     }
 }
