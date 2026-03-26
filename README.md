@@ -20,7 +20,9 @@
 
 - **Hetzner Cloud** - Automatic VM provisioning via cloud-init
 - **Baremetal** - SSH-based provisioning for existing servers
+- **Removal** - Clean uninstall of Tengu and all dependencies
 - **Idempotent** - Safe to re-run, only applies needed changes
+- **Interactive** - Prompts for missing credentials with config file and env var support
 - **Multi-arch** - Supports both ARM64 and x86_64
 
 ## Install
@@ -31,34 +33,53 @@ curl -fsSL https://raw.githubusercontent.com/tengu-apps/tengu-init/master/instal
 
 Or download binaries directly from [releases](https://github.com/tengu-apps/tengu-init/releases).
 
-**Requires:** [hcloud CLI](https://github.com/hetznercloud/cli) configured with an API token (for Hetzner provisioning).
-
 ## Usage
 
-### Hetzner Cloud (default)
+### Baremetal / Existing Server
 
 ```bash
-# Interactive provisioning
-tengu-init
-
-# Preview without creating
-tengu-init --dry-run
-
-# Override server type
-tengu-init --server-type cpx41
-```
-
-### Baremetal Server
-
-```bash
-# Provision existing server via SSH
-tengu-init baremetal chi@192.168.1.100
+# Provision existing server via SSH (interactive credential prompts)
+tengu-init chi@192.168.1.100
 
 # Custom SSH port
-tengu-init baremetal chi@my-server.com --port 2222
+tengu-init chi@my-server.com --port 2222
 
 # Generate script only (don't execute)
-tengu-init baremetal chi@server --script-only > provision.sh
+tengu-init chi@server --script-only > provision.sh
+
+# Dry run - show config without provisioning
+tengu-init chi@server --dry-run
+```
+
+### Hetzner Cloud
+
+```bash
+# Create Hetzner VPS and provision
+tengu-init --hetzner
+
+# Override server type and location
+tengu-init --hetzner --server-type cpx41 --location fsn1
+
+# Preview without creating
+tengu-init --hetzner --dry-run
+
+# Force recreate existing server
+tengu-init --hetzner --force
+```
+
+**Requires:** [hcloud CLI](https://github.com/hetznercloud/cli) configured with an API token.
+
+### Remove Tengu
+
+```bash
+# Remove Tengu and all installed dependencies
+tengu-init chi@server --remove
+
+# Skip confirmation prompt
+tengu-init chi@server --remove --force
+
+# Generate removal script only
+tengu-init chi@server --remove --script-only
 ```
 
 ### Show Generated Config
@@ -73,6 +94,10 @@ tengu-init show bash
 
 ## Configuration
 
+Credentials are resolved in order: **CLI flags > environment variables > config file > interactive prompt**.
+
+### Config File
+
 Create `~/.config/tengu/init.toml`:
 
 ```toml
@@ -81,6 +106,7 @@ name = "tengu"
 type = "cax41"        # ARM64, 16 vCPU, 32GB RAM
 location = "hel1"     # Helsinki
 image = "ubuntu-24.04"
+release = "v0.1.0"    # Tengu release tag
 
 [domains]
 platform = "tengu.to"
@@ -100,20 +126,45 @@ public_key = "ssh-ed25519 AAAA..."
 email = "notify@example.com"
 ```
 
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `CF_API_KEY` | Cloudflare API key |
+| `CF_EMAIL` | Cloudflare email |
+| `RESEND_API_KEY` | Resend API key |
+| `SSH_PUBLIC_KEY` | SSH public key |
+
+### CLI Flags
+
+All config values can be passed as flags:
+
+```bash
+tengu-init chi@server \
+  --cf-api-key "..." \
+  --cf-email "..." \
+  --resend-api-key "..." \
+  --domain-platform tengu.to \
+  --domain-apps tengu.host \
+  --ssh-key "ssh-ed25519 AAAA..." \
+  --notify-email admin@example.com \
+  --release v0.1.0
+```
+
 ## Server Types
 
 | Type | Arch | vCPU | RAM | Disk | Price |
 |------|------|------|-----|------|-------|
-| `cax11` | ARM64 | 2 | 4GB | 40GB | ~€4/mo |
-| `cax21` | ARM64 | 4 | 8GB | 80GB | ~€8/mo |
-| `cax31` | ARM64 | 8 | 16GB | 160GB | ~€15/mo |
-| `cax41` | ARM64 | 16 | 32GB | 320GB | ~€30/mo |
-| `cpx11` | x86 | 2 | 2GB | 40GB | ~€5/mo |
-| `cpx21` | x86 | 3 | 4GB | 80GB | ~€9/mo |
-| `cpx31` | x86 | 4 | 8GB | 160GB | ~€17/mo |
-| `cpx41` | x86 | 8 | 16GB | 240GB | ~€32/mo |
+| `cax11` | ARM64 | 2 | 4GB | 40GB | ~EUR4/mo |
+| `cax21` | ARM64 | 4 | 8GB | 80GB | ~EUR8/mo |
+| `cax31` | ARM64 | 8 | 16GB | 160GB | ~EUR15/mo |
+| `cax41` | ARM64 | 16 | 32GB | 320GB | ~EUR30/mo |
+| `cpx11` | x86 | 2 | 2GB | 40GB | ~EUR5/mo |
+| `cpx21` | x86 | 3 | 4GB | 80GB | ~EUR9/mo |
+| `cpx31` | x86 | 4 | 8GB | 160GB | ~EUR17/mo |
+| `cpx41` | x86 | 8 | 16GB | 240GB | ~EUR32/mo |
 
-ARM servers (cax*) are recommended—cheaper and Tengu builds for both architectures.
+ARM servers (cax*) are recommended -- cheaper and Tengu builds for both architectures.
 
 ## What Gets Installed
 
@@ -121,7 +172,7 @@ ARM servers (cax*) are recommended—cheaper and Tengu builds for both architect
 |-----------|-------------|
 | **Docker** | Container runtime (docker.io) |
 | **tengu-caddy** | Caddy with Cloudflare DNS plugin for automatic HTTPS |
-| **PostgreSQL 18** | Database with pgvector extension for AI/embeddings |
+| **PostgreSQL 16** | Database with pgvector extension for AI/embeddings |
 | **Ollama** | Local LLM inference for RAG features |
 | **Tengu** | PaaS server with SSH git endpoint and API |
 | **fail2ban** | Intrusion prevention |
