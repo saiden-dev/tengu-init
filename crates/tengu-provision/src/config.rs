@@ -49,6 +49,9 @@ findtime = 600
             r#"# Tengu PaaS Configuration
 domain = "{}"
 
+[database]
+url = "postgres://tengu:tengu@localhost:5432/tengu"
+
 [cloudflare]
 api_key = "{}"
 email = "{}"

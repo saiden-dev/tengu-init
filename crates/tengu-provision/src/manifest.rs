@@ -268,13 +268,13 @@ impl Manifest {
             .unless(r"sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw tengu"),
         );
 
-        // Create tengu PostgreSQL user
+        // Create tengu PostgreSQL user (or ensure password is set if user exists)
         manifest.add_step(
             RunCommand::new(
                 "Create tengu PostgreSQL user",
-                r#"sudo -u postgres psql -c "CREATE USER tengu WITH PASSWORD 'tengu';" 2>/dev/null || true"#,
+                r#"sudo -u postgres psql -c "CREATE USER tengu WITH PASSWORD 'tengu';" 2>/dev/null || sudo -u postgres psql -c "ALTER USER tengu WITH PASSWORD 'tengu';""#,
             )
-            .unless(r#"sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='tengu'" | grep -q 1"#),
+            .unless(r#"PGPASSWORD=tengu psql -U tengu -h 127.0.0.1 -d tengu -c "SELECT 1" >/dev/null 2>&1"#),
         );
 
         // Grant privileges

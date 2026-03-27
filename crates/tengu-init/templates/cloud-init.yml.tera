@@ -50,6 +50,9 @@ write_files:
       # Tengu PaaS Configuration
       domain = "{{ domain_apps }}"
 
+      [database]
+      url = "postgres://tengu:tengu@localhost:5432/tengu"
+
       [cloudflare]
       api_key = "{{ cf_api_key }}"
       email = "{{ cf_email }}"
