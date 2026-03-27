@@ -1,6 +1,6 @@
 [package]
 name = "tengu-provision"
-version = "0.3.2"
+version = "0.3.3"
 description = "Installation step library for Tengu PaaS provisioning"
 keywords = ["tengu", "paas", "provisioning", "cloud-init", "idempotent"]
 categories = ["command-line-utilities"]
