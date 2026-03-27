@@ -171,7 +171,7 @@ impl InstallDebFromUrl {
     pub fn tengu_caddy() -> Self {
         Self::new(
             "tengu-caddy",
-            "https://github.com/tengu-apps/tengu-caddy/releases/latest/download/tengu-caddy_2.11.2-1_{arch}.deb",
+            "https://github.com/tengu-apps/tengu-caddy/releases/latest/download/tengu-caddy_2.11.2-2_{arch}.deb",
         )
     }
 }
