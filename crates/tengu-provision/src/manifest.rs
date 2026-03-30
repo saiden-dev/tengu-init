@@ -216,14 +216,16 @@ impl Manifest {
         );
 
         // =========================================================
-        // Phase 9: Firewall Rules
+        // Phase 9: Firewall Rules (optional)
         // =========================================================
-        manifest.add_step(
-            EnsureFirewall::new()
-                .allow("22/tcp") // SSH
-                .allow("80/tcp") // HTTP
-                .allow("443/tcp"), // HTTPS
-        );
+        if config.enable_ufw {
+            manifest.add_step(
+                EnsureFirewall::new()
+                    .allow("22/tcp") // SSH
+                    .allow("80/tcp") // HTTP
+                    .allow("443/tcp"), // HTTPS
+            );
+        }
 
         // =========================================================
         // Phase 10: Enable and Start Services

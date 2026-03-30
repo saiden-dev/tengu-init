@@ -61,6 +61,16 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
+# Track installed packages for clean uninstall
+TENGU_INSTALLED_FILE="/etc/tengu/installed-by-tengu.txt"
+track_pkg() {
+    local pkg="$1"
+    mkdir -p /etc/tengu
+    if ! grep -qxF "$pkg" "$TENGU_INSTALLED_FILE" 2>/dev/null; then
+        echo "$pkg" >> "$TENGU_INSTALLED_FILE"
+    fi
+}
+
 # Progress markers for machine parsing
 # Format: TENGU_STEP:ACTION:step_num:description
 step_start() {
@@ -95,7 +105,17 @@ step_fail() {
                 );
             } else {
                 script.push_str(
-                    r#"# Progress markers for machine parsing (no color)
+                    r#"# Track installed packages for clean uninstall
+TENGU_INSTALLED_FILE="/etc/tengu/installed-by-tengu.txt"
+track_pkg() {
+    local pkg="$1"
+    mkdir -p /etc/tengu
+    if ! grep -qxF "$pkg" "$TENGU_INSTALLED_FILE" 2>/dev/null; then
+        echo "$pkg" >> "$TENGU_INSTALLED_FILE"
+    fi
+}
+
+# Progress markers for machine parsing (no color)
 # Format: TENGU_STEP:ACTION:step_num:description
 step_start() {
     local step_num="$1"

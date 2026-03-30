@@ -108,10 +108,10 @@ impl Step for InstallPackage {
             ));
         }
 
-        // Idempotent install
+        // Idempotent install + track
         cmds.push(format!(
-            "dpkg -s {} 2>/dev/null | grep -q '^Status: install ok installed' || apt-get install -y {}",
-            self.name, self.name
+            "dpkg -s {name} 2>/dev/null | grep -q '^Status: install ok installed' || {{ apt-get install -y {name} && track_pkg {name}; }}",
+            name = self.name
         ));
 
         cmds
@@ -216,7 +216,8 @@ fi"#,
 URL=$(echo '{url}' | sed "s/{{arch}}/$ARCH/g")
 wget -q "$URL" -O /tmp/{name}.deb
 dpkg -i --force-confold /tmp/{name}.deb || apt-get install -f -y
-rm -f /tmp/{name}.deb"#,
+rm -f /tmp/{name}.deb
+track_pkg {name}"#,
             url = self.url_template,
             name = self.name
         )]

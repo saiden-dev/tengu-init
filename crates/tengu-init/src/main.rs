@@ -155,6 +155,10 @@ struct Args {
     #[arg(short, long)]
     config: Option<PathBuf>,
 
+    /// Enable UFW firewall configuration
+    #[arg(long)]
+    ufw: bool,
+
     /// Show config file path and exit
     #[arg(long)]
     show_config: bool,
@@ -613,6 +617,7 @@ fn main() -> Result<()> {
             },
         )
         .release(&resolved.release)
+        .enable_ufw(args.ufw)
         .build();
 
     // Script-only mode (only for direct SSH)
@@ -788,6 +793,7 @@ fn run_show(config: &Config) -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_RELEASE.to_string()),
         )
+        .enable_ufw(false)
         .build();
 
     let manifest = Manifest::tengu(&tengu_config);

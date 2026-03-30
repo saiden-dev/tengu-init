@@ -77,7 +77,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 step=0
-total=15
+total=17
 
 progress() {
     step=$((step + 1))
@@ -90,18 +90,26 @@ echo -e "${RED}║        TENGU REMOVAL IN PROGRESS      ║${NC}"
 echo -e "${RED}╚═══════════════════════════════════════╝${NC}"
 echo ""
 
+# Get the actual user's home directory (not root's when running with sudo)
+ACTUAL_USER="${SUDO_USER:-$USER}"
+ACTUAL_HOME=$(getent passwd "$ACTUAL_USER" | cut -d: -f6)
+
 # Phase 0: Cloudflare Tunnel cleanup
 progress "Stopping cloudflared service..."
 sudo systemctl stop cloudflared 2>/dev/null || true
 sudo systemctl disable cloudflared 2>/dev/null || true
 sudo cloudflared service uninstall 2>/dev/null || true
+sudo rm -rf /etc/cloudflared
 
 progress "Deleting cloudflare tunnel..."
-cloudflared tunnel delete tengu 2>/dev/null || true
+# Run as actual user to access their credentials
+sudo -u "$ACTUAL_USER" cloudflared tunnel delete tengu 2>/dev/null || true
 
-progress "Removing cloudflared..."
+progress "Removing cloudflared credentials..."
+rm -rf "$ACTUAL_HOME/.cloudflared"
+
+progress "Removing cloudflared package..."
 sudo dpkg --purge cloudflared 2>/dev/null || true
-rm -rf ~/.cloudflared
 
 # Phase 1: Stop services
 progress "Stopping tengu service..."
@@ -131,20 +139,29 @@ systemctl stop fail2ban 2>/dev/null || true
 systemctl disable fail2ban 2>/dev/null || true
 
 # Phase 2: Remove packages
-progress "Removing tengu package..."
+progress "Removing tengu packages..."
 dpkg --purge tengu 2>/dev/null || true
-
-progress "Removing tengu-caddy package..."
 dpkg --purge tengu-caddy 2>/dev/null || true
 
 progress "Removing installed packages..."
 export DEBIAN_FRONTEND=noninteractive
-apt-get purge -y \
-    ollama \
-    postgresql-16 postgresql-16-pgvector \
-    docker.io docker-compose \
-    fail2ban \
-    2>/dev/null || true
+TENGU_INSTALLED_FILE="/etc/tengu/installed-by-tengu.txt"
+if [ -f "$TENGU_INSTALLED_FILE" ]; then
+    echo "  Packages to remove: $(cat "$TENGU_INSTALLED_FILE" | tr '\n' ' ')"
+    while IFS= read -r pkg || [ -n "$pkg" ]; do
+        [ -z "$pkg" ] && continue
+        echo "  Removing $pkg..."
+        apt-get purge -y "$pkg" 2>/dev/null || true
+    done < "$TENGU_INSTALLED_FILE"
+else
+    echo "  No package tracking file found, removing known packages..."
+    apt-get purge -y \
+        tengu tengu-caddy ollama cloudflared \
+        postgresql-16 postgresql-16-pgvector postgresql-client-16 postgresql-common postgresql-client-common \
+        docker.io docker-compose docker-compose-v2 containerd runc \
+        fail2ban ufw \
+        2>/dev/null || true
+fi
 apt-get autoremove -y 2>/dev/null || true
 
 # Phase 3: Remove config and data directories
@@ -152,15 +169,16 @@ progress "Removing Tengu configuration and data..."
 rm -rf /etc/tengu
 rm -rf /var/lib/tengu
 rm -rf /var/log/tengu
-rm -rf /etc/caddy/sites
-rm -f /etc/caddy/Caddyfile
-rm -f /etc/fail2ban/jail.local
+rm -rf /etc/caddy
+rm -rf /etc/fail2ban/jail.local
 rm -rf /etc/systemd/system/caddy.service.d
+# Note: /var/lib/postgresql and /var/lib/docker are left intact
+# Removing them would require cluster reinitialization on next provision
 
-# Phase 4: Reset firewall
-progress "Resetting firewall rules..."
-ufw --force reset 2>/dev/null || true
-ufw disable 2>/dev/null || true
+# Phase 4: Remove tengu user
+progress "Removing tengu user..."
+userdel -r tengu 2>/dev/null || true
+groupdel tengu 2>/dev/null || true
 
 # Phase 5: Remove APT repositories added during install
 progress "Cleaning up APT repositories..."

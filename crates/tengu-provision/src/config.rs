@@ -21,6 +21,8 @@ pub struct TenguConfig {
     pub ssh_keys: Vec<String>,
     /// Tengu release tag
     pub release: String,
+    /// Enable UFW firewall configuration
+    pub enable_ufw: bool,
 }
 
 impl TenguConfig {
@@ -133,6 +135,7 @@ git.{} {{
             notify_email: "notify@example.com".into(),
             ssh_keys: vec!["ssh-ed25519 AAAA... test@test".into()],
             release: "v0.1.0-test".into(),
+            enable_ufw: false,
         }
     }
 }
@@ -195,6 +198,12 @@ impl TenguConfigBuilder {
     /// Set the release tag
     pub fn release(mut self, release: impl Into<String>) -> Self {
         self.config.release = release.into();
+        self
+    }
+
+    /// Enable or disable UFW firewall configuration
+    pub fn enable_ufw(mut self, enable: bool) -> Self {
+        self.config.enable_ufw = enable;
         self
     }
 
