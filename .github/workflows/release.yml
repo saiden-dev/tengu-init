@@ -137,3 +137,79 @@ jobs:
           files: artifacts/*
           generate_release_notes: true
 
+  update-homebrew:
+    name: update-homebrew
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download release assets and compute checksums
+        id: checksums
+        run: |
+          for asset in tengu-init-apple-silicon tengu-init-linux-amd64 tengu-init-linux-arm64; do
+            curl -fsSL "https://github.com/tengu-apps/tengu-init/releases/download/${GITHUB_REF_NAME}/${asset}" -o "${asset}"
+            sha=$(sha256sum "${asset}" | cut -d' ' -f1)
+            key=$(echo "${asset}" | tr '-' '_')
+            echo "${key}=${sha}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Update Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA_MACOS="${{ steps.checksums.outputs.tengu_init_apple_silicon }}"
+          SHA_LINUX_AMD="${{ steps.checksums.outputs.tengu_init_linux_amd64 }}"
+          SHA_LINUX_ARM="${{ steps.checksums.outputs.tengu_init_linux_arm64 }}"
+
+          cat > /tmp/tengu-init.rb <<EOF
+          class TenguInit < Formula
+            desc "Provision Tengu PaaS servers via SSH"
+            homepage "https://github.com/tengu-apps/tengu-init"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/tengu-apps/tengu-init/releases/download/v#{version}/tengu-init-apple-silicon"
+                sha256 "${SHA_MACOS}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/tengu-apps/tengu-init/releases/download/v#{version}/tengu-init-linux-arm64"
+                sha256 "${SHA_LINUX_ARM}"
+              end
+
+              on_intel do
+                url "https://github.com/tengu-apps/tengu-init/releases/download/v#{version}/tengu-init-linux-amd64"
+                sha256 "${SHA_LINUX_AMD}"
+              end
+            end
+
+            def install
+              binary = Dir["tengu-init-*"].first || "tengu-init"
+              bin.install binary => "tengu-init"
+            end
+
+            test do
+              assert_match "tengu-init", shell_output("#{bin}/tengu-init --version")
+            end
+          end
+          EOF
+
+          sed -i 's/^          //' /tmp/tengu-init.rb
+
+          CONTENT=$(base64 -w0 /tmp/tengu-init.rb)
+          SHA=$(gh api repos/tengu-apps/homebrew-tap/contents/Formula/tengu-init.rb --jq '.sha')
+
+          gh api repos/tengu-apps/homebrew-tap/contents/Formula/tengu-init.rb \
+            -X PUT \
+            -f message="Update tengu-init to ${VERSION}" \
+            -f content="${CONTENT}" \
+            -f sha="${SHA}"
+
