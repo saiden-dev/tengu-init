@@ -237,6 +237,11 @@ impl Manifest {
         // =========================================================
         // Phase 10: Enable and Start Services
         // =========================================================
+        // Settle after package installations — systemd needs to catch up
+        manifest.add_step(RunCommand::new(
+            "Settle after package installs",
+            "systemctl daemon-reload && sleep 3",
+        ));
         // docker.service requires docker.socket for socket activation
         manifest.add_step(EnsureService::new("docker.socket"));
         manifest.add_step(EnsureService::new("docker"));
