@@ -303,9 +303,13 @@ impl Manifest {
                 let entry = format!(
                     "command=\"/usr/bin/tengu git-shell-cmd {username}\",restrict {key_escaped}"
                 );
+                // Remove any bare key (Hetzner cloud-init injects it) then add with command= restriction
                 format!(
-                    "grep -qF '{key_escaped}' /home/tengu/.ssh/authorized_keys 2>/dev/null || \
-                     echo '{entry}' >> /home/tengu/.ssh/authorized_keys"
+                    "sed -i '/^ssh-.*{key_short}/d' /home/tengu/.ssh/authorized_keys 2>/dev/null; \
+                     grep -qF 'git-shell-cmd' /home/tengu/.ssh/authorized_keys 2>/dev/null && \
+                     grep -qF '{key_short}' /home/tengu/.ssh/authorized_keys 2>/dev/null || \
+                     echo '{entry}' >> /home/tengu/.ssh/authorized_keys",
+                    key_short = key.split_whitespace().nth(1).unwrap_or(""),
                 )
             }).collect();
 
