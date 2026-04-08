@@ -64,10 +64,12 @@ impl Step for EnsureService {
         }
 
         if self.started {
-            // Retry once after 2s if start fails (services may need time after install)
+            // Retry up to 5 times with 3s sleep if start fails (services may need time after install)
             cmds.push(format!(
-                "systemctl is-active {} >/dev/null 2>&1 || systemctl start {} || {{ sleep 2 && systemctl start {}; }}",
-                self.name, self.name, self.name
+                "systemctl is-active {name} >/dev/null 2>&1 || \
+                 systemctl start {name} || \
+                 {{ for i in 1 2 3 4 5; do sleep 3; systemctl start {name} && break; done; }}",
+                name = self.name
             ));
         }
 

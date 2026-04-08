@@ -99,6 +99,21 @@ impl Hetzner {
         Ok(status.success())
     }
 
+    /// Delete an SSH key from Hetzner by name
+    pub fn delete_ssh_key(name: &str) -> Result<()> {
+        let output = Command::new("hcloud")
+            .args(["ssh-key", "delete", name])
+            .output()
+            .context("Failed to delete SSH key")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to delete SSH key: {stderr}");
+        }
+
+        Ok(())
+    }
+
     /// Create an SSH key in Hetzner from a public key string
     pub fn create_ssh_key(name: &str, public_key: &str) -> Result<()> {
         let output = Command::new("hcloud")

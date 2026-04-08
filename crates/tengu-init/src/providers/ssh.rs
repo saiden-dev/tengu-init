@@ -340,19 +340,10 @@ echo ""
         );
         self.upload_script(&script)?;
 
-        // Execute script (retry once if it fails — services may need time to start)
+        // Execute script (no retry — apt lock preamble and service retries handle transients)
         println!("{} Executing provisioning script...\n", style("*").cyan());
         println!("{}", style("-".repeat(50)).dim());
-        if let Err(e) = self.execute_script(total_steps) {
-            println!("{}", style("-".repeat(50)).dim());
-            println!(
-                "\n{} First run failed ({}), retrying (script is idempotent)...\n",
-                style("!").yellow(),
-                e
-            );
-            println!("{}", style("-".repeat(50)).dim());
-            self.execute_script(total_steps)?;
-        }
+        self.execute_script(total_steps)?;
         println!("{}", style("-".repeat(50)).dim());
 
         // Cleanup
@@ -626,13 +617,13 @@ echo ""
         spinner.enable_steady_tick(Duration::from_millis(100));
 
         let mut attempts = 0;
-        let max_attempts = 30;
+        let max_attempts = 24;
 
         loop {
             let mut args = self.ssh_args();
             args.extend([
                 "-o".into(),
-                "ConnectTimeout=5".into(),
+                "ConnectTimeout=10".into(),
                 "-o".into(),
                 "BatchMode=yes".into(),
                 self.ssh_destination(),
@@ -659,7 +650,7 @@ echo ""
                 bail!("Could not connect to {}:{} via SSH", self.host, self.port);
             }
 
-            std::thread::sleep(Duration::from_secs(2));
+            std::thread::sleep(Duration::from_secs(5));
         }
 
         spinner.finish_with_message(format!("{} SSH connection established", style("v").green()));

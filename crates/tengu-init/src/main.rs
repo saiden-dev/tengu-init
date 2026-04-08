@@ -492,6 +492,9 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
 }
 
 /// Resolve Hetzner-specific parameters
+///
+/// Default: cax41 (ARM64) in hel1 (Helsinki). Note that x86 `cpx*` types are
+/// unavailable in EU since 2026-01-01. For x86, use `--location ash` or `--location hil`.
 fn resolve_hetzner_params(args: &Args, config: &Config) -> HetznerParams {
     HetznerParams {
         name: args
@@ -640,7 +643,8 @@ fn main() -> Result<()> {
     print_banner();
 
     // Determine the host - either from args or create via Hetzner
-    let (host, created_server) = if args.hetzner {
+    // server_ip is Some(ip) when we created the server (for DNS update)
+    let (host, server_ip) = if args.hetzner {
         let hetzner_params = resolve_hetzner_params(&args, &file_config);
         print_hetzner_config_table(&resolved, &hetzner_params)?;
 
@@ -687,11 +691,12 @@ fn main() -> Result<()> {
             Hetzner::delete_server(&hetzner_params.name)?;
         }
 
-        // Ensure SSH key exists in Hetzner
-        if !Hetzner::ssh_key_exists(SSH_KEY_NAME)? {
-            println!("{} Creating SSH key in Hetzner...", style("*").cyan());
-            Hetzner::create_ssh_key(SSH_KEY_NAME, &resolved.ssh_key)?;
+        // Ensure SSH key in Hetzner matches current machine (ephemeral, safe to recreate)
+        if Hetzner::ssh_key_exists(SSH_KEY_NAME)? {
+            Hetzner::delete_ssh_key(SSH_KEY_NAME)?;
         }
+        println!("{} Creating SSH key in Hetzner...", style("*").cyan());
+        Hetzner::create_ssh_key(SSH_KEY_NAME, &resolved.ssh_key)?;
 
         // Create server (plain Ubuntu with SSH key)
         println!("\n{ROCKET} Creating server...");
@@ -710,7 +715,7 @@ fn main() -> Result<()> {
         Hetzner::clear_host_key(&ip);
 
         // Host is root@ip (Hetzner default)
-        (format!("root@{ip}"), true)
+        (format!("root@{ip}"), Some(ip))
     } else {
         print_provision_config_table(&resolved);
 
@@ -734,7 +739,7 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
-        (args.host.clone().unwrap(), false)
+        (args.host.clone().unwrap(), None)
     };
 
     println!(
@@ -754,14 +759,148 @@ fn main() -> Result<()> {
     };
     provider.setup_tunnel(&tunnel_config)?;
 
+    // Update wildcard DNS to point *.apps-domain to the new VM IP
+    if let Some(ref ip) = server_ip {
+        update_wildcard_dns(
+            &resolved.cf_email,
+            &resolved.cf_api_key,
+            &resolved.domain_apps,
+            ip,
+        )?;
+    }
+
     // Print success
-    if created_server {
+    if server_ip.is_some() {
         print_success(&resolved);
     } else {
         print_provision_success(&tengu_config);
     }
 
     Ok(())
+}
+
+/// Update the wildcard DNS A record (e.g., `*.tengu.host`) to point to the new VM IP.
+///
+/// Uses the Cloudflare API via `curl`:
+/// 1. GET zone ID for the domain
+/// 2. GET record ID for the wildcard `*` A record
+/// 3. PUT to update the A record with the new IP
+fn update_wildcard_dns(cf_email: &str, cf_api_key: &str, domain: &str, ip: &str) -> Result<()> {
+    println!(
+        "\n{} Updating *.{} DNS to {}...",
+        style("*").cyan(),
+        domain,
+        style(ip).cyan()
+    );
+
+    // Step 1: Get zone ID
+    let output = Command::new("curl")
+        .args([
+            "-sf",
+            "-X", "GET",
+            &format!("https://api.cloudflare.com/client/v4/zones?name={domain}"),
+            "-H", &format!("X-Auth-Email: {cf_email}"),
+            "-H", &format!("X-Auth-Key: {cf_api_key}"),
+            "-H", "Content-Type: application/json",
+        ])
+        .output()
+        .context("Failed to call Cloudflare API (zones)")?;
+
+    let zones_json = String::from_utf8_lossy(&output.stdout);
+    let zone_id = extract_json_field(&zones_json, "id")
+        .context("Failed to extract zone ID from Cloudflare response")?;
+
+    // Step 2: Get wildcard A record ID
+    let output = Command::new("curl")
+        .args([
+            "-sf",
+            "-X", "GET",
+            &format!(
+                "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name=*.{domain}"
+            ),
+            "-H", &format!("X-Auth-Email: {cf_email}"),
+            "-H", &format!("X-Auth-Key: {cf_api_key}"),
+            "-H", "Content-Type: application/json",
+        ])
+        .output()
+        .context("Failed to call Cloudflare API (dns_records)")?;
+
+    let records_json = String::from_utf8_lossy(&output.stdout);
+    let record_id = extract_json_field(&records_json, "id");
+
+    if let Some(id) = record_id {
+        // Update existing record
+        let output = Command::new("curl")
+            .args([
+                "-sf",
+                "-X", "PUT",
+                &format!(
+                    "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{id}"
+                ),
+                "-H", &format!("X-Auth-Email: {cf_email}"),
+                "-H", &format!("X-Auth-Key: {cf_api_key}"),
+                "-H", "Content-Type: application/json",
+                "--data", &format!(
+                    r#"{{"type":"A","name":"*.{domain}","content":"{ip}","ttl":1,"proxied":false}}"#
+                ),
+            ])
+            .output()
+            .context("Failed to update DNS record")?;
+
+        if !output.status.success() {
+            bail!("Failed to update wildcard DNS record");
+        }
+    } else {
+        // Create new record
+        let output = Command::new("curl")
+            .args([
+                "-sf",
+                "-X", "POST",
+                &format!(
+                    "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
+                ),
+                "-H", &format!("X-Auth-Email: {cf_email}"),
+                "-H", &format!("X-Auth-Key: {cf_api_key}"),
+                "-H", "Content-Type: application/json",
+                "--data", &format!(
+                    r#"{{"type":"A","name":"*.{domain}","content":"{ip}","ttl":1,"proxied":false}}"#
+                ),
+            ])
+            .output()
+            .context("Failed to create DNS record")?;
+
+        if !output.status.success() {
+            bail!("Failed to create wildcard DNS record");
+        }
+    }
+
+    println!(
+        "  {} *.{} -> {}",
+        style("v").green(),
+        domain,
+        ip
+    );
+
+    Ok(())
+}
+
+/// Extract the first occurrence of a field value from a Cloudflare JSON response.
+///
+/// Looks for `"field":"value"` in the `result` array. This is a minimal parser
+/// to avoid adding a JSON dependency -- the Cloudflare API responses are predictable.
+fn extract_json_field(json: &str, field: &str) -> Option<String> {
+    // Look for "result":[{..."field":"value"...
+    let result_start = json.find("\"result\":[")?;
+    let after_result = &json[result_start..];
+
+    // Find the field within the first result object
+    let pattern = format!("\"{field}\":\"");
+    let field_start = after_result.find(&pattern)?;
+    let value_start = field_start + pattern.len();
+    let remaining = &after_result[value_start..];
+    let value_end = remaining.find('"')?;
+
+    Some(remaining[..value_end].to_string())
 }
 
 /// Run show command - displays the generated provisioning script

@@ -116,11 +116,15 @@ git.{} {{
         )
     }
 
-    /// Generate Caddy systemd drop-in for Cloudflare API token
+    /// Generate Caddy systemd drop-in for Cloudflare API credentials
+    ///
+    /// Sets `CF_API_TOKEN`, `CF_API_KEY`, and `CF_API_EMAIL` so the Caddy Cloudflare
+    /// DNS module works with both scoped API tokens and Global API Keys.
     pub fn caddy_cloudflare_env(&self) -> String {
         format!(
-            "[Service]\nEnvironment=\"CF_API_TOKEN={}\"\n",
-            self.cf_api_key
+            "[Service]\nEnvironment=\"CF_API_TOKEN={key}\"\nEnvironment=\"CF_API_KEY={key}\"\nEnvironment=\"CF_API_EMAIL={email}\"\n",
+            key = self.cf_api_key,
+            email = self.cf_email,
         )
     }
 

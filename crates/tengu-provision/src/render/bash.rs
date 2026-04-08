@@ -50,6 +50,15 @@ impl Renderer for BashRenderer {
         script.push_str("set -euo pipefail\n");
         script.push_str("export DEBIAN_FRONTEND=noninteractive\n\n");
 
+        // Wait for apt locks (unattended-upgrades on fresh Ubuntu VMs)
+        script.push_str(
+            "# Wait for apt locks (unattended-upgrades on fresh Ubuntu VMs)\n\
+             while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do\n\
+             \x20   echo \"Waiting for dpkg lock...\"\n\
+             \x20   sleep 5\n\
+             done\n\n",
+        );
+
         // Progress tracking functions with machine-parseable markers
         if self.verbose {
             if self.color {
