@@ -87,6 +87,9 @@ ssh = "ssh.{}"
         format!(
             r"{{
     email {}
+    # App sites are behind CF tunnel — TLS terminated at Cloudflare edge.
+    # Only platform routes (api/docs/git) use Caddy-managed TLS via DNS challenge.
+    auto_https disable_redirects
 }}
 
 (cf_tls) {{

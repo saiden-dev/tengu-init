@@ -776,13 +776,22 @@ fn main() -> Result<()> {
     };
     provider.setup_tunnel(&tunnel_config)?;
 
-    // Update wildcard DNS to point *.apps-domain to the new VM IP
+    // Update wildcard DNS for apps domain
     if let Some(ref ip) = server_ip {
+        // Hetzner mode: point *.apps-domain to VM IP (A record, not proxied)
         update_wildcard_dns(
             &resolved.cf_email,
             &resolved.cf_api_key,
             &resolved.domain_apps,
             ip,
+        )?;
+    } else {
+        // Local/SSH mode: point *.apps-domain to tunnel (CNAME, proxied)
+        update_wildcard_dns_tunnel(
+            &resolved.cf_email,
+            &resolved.cf_api_key,
+            &resolved.domain_apps,
+            &tunnel_config.tunnel_name,
         )?;
     }
 
@@ -896,6 +905,145 @@ fn update_wildcard_dns(cf_email: &str, cf_api_key: &str, domain: &str, ip: &str)
         style("v").green(),
         domain,
         ip
+    );
+
+    Ok(())
+}
+
+/// Update the wildcard DNS to a proxied CNAME pointing at the Cloudflare Tunnel.
+///
+/// Used when provisioning via SSH (not Hetzner) — traffic goes through the tunnel.
+/// Replaces any existing A or CNAME record for `*.domain` with a proxied CNAME
+/// to `{tunnel_id}.cfargotunnel.com`.
+fn update_wildcard_dns_tunnel(
+    cf_email: &str,
+    cf_api_key: &str,
+    domain: &str,
+    tunnel_name: &str,
+) -> Result<()> {
+    println!(
+        "\n{} Updating *.{} DNS to tunnel '{}'...",
+        style("*").cyan(),
+        domain,
+        tunnel_name
+    );
+
+    // Step 1: Get zone ID
+    let output = Command::new("curl")
+        .args([
+            "-sf",
+            "-X", "GET",
+            &format!("https://api.cloudflare.com/client/v4/zones?name={domain}"),
+            "-H", &format!("X-Auth-Email: {cf_email}"),
+            "-H", &format!("X-Auth-Key: {cf_api_key}"),
+            "-H", "Content-Type: application/json",
+        ])
+        .output()
+        .context("Failed to call Cloudflare API (zones)")?;
+
+    let zones_json = String::from_utf8_lossy(&output.stdout);
+    let zone_id = extract_json_field(&zones_json, "id")
+        .context("Failed to extract zone ID from Cloudflare response")?;
+
+    // Step 2: Get tunnel ID from cloudflared on the remote (already created by setup_tunnel)
+    // We need the full UUID for the CNAME target
+    let tunnel_list = Command::new("ssh")
+        .args(["-o", "ConnectTimeout=5", "root@localhost",
+            &format!("cloudflared tunnel list -n {tunnel_name} -o json 2>/dev/null || true")])
+        .output();
+
+    // Fallback: use cloudflared locally if available, or construct from tunnel route dns output
+    // For simplicity, use the tunnel name to route dns (cloudflared handles the CNAME)
+    // But we're running from fuji, not the server. Use the CF API to find the tunnel.
+    let tunnels_output = Command::new("curl")
+        .args([
+            "-sf",
+            "-X", "GET",
+            &format!("https://api.cloudflare.com/client/v4/accounts"),
+            "-H", &format!("X-Auth-Email: {cf_email}"),
+            "-H", &format!("X-Auth-Key: {cf_api_key}"),
+            "-H", "Content-Type: application/json",
+        ])
+        .output()
+        .context("Failed to get CF accounts")?;
+
+    let accounts_json = String::from_utf8_lossy(&tunnels_output.stdout);
+    let account_id = extract_json_field(&accounts_json, "id")
+        .context("Failed to extract account ID")?;
+
+    // Get tunnel UUID
+    let tunnels_output = Command::new("curl")
+        .args([
+            "-sf",
+            "-X", "GET",
+            &format!("https://api.cloudflare.com/client/v4/accounts/{account_id}/tunnels?name={tunnel_name}&is_deleted=false"),
+            "-H", &format!("X-Auth-Email: {cf_email}"),
+            "-H", &format!("X-Auth-Key: {cf_api_key}"),
+            "-H", "Content-Type: application/json",
+        ])
+        .output()
+        .context("Failed to get tunnel info")?;
+
+    let tunnels_json = String::from_utf8_lossy(&tunnels_output.stdout);
+    let tunnel_id = extract_json_field(&tunnels_json, "id")
+        .context("Failed to extract tunnel ID")?;
+
+    let cname_target = format!("{tunnel_id}.cfargotunnel.com");
+
+    // Step 3: Delete existing wildcard record (A or CNAME)
+    for rtype in &["A", "CNAME"] {
+        let output = Command::new("curl")
+            .args([
+                "-sf",
+                "-X", "GET",
+                &format!(
+                    "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type={rtype}&name=*.{domain}"
+                ),
+                "-H", &format!("X-Auth-Email: {cf_email}"),
+                "-H", &format!("X-Auth-Key: {cf_api_key}"),
+                "-H", "Content-Type: application/json",
+            ])
+            .output()?;
+
+        let json = String::from_utf8_lossy(&output.stdout);
+        if let Some(record_id) = extract_json_field(&json, "id") {
+            Command::new("curl")
+                .args([
+                    "-sf",
+                    "-X", "DELETE",
+                    &format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}"),
+                    "-H", &format!("X-Auth-Email: {cf_email}"),
+                    "-H", &format!("X-Auth-Key: {cf_api_key}"),
+                ])
+                .output()?;
+        }
+    }
+
+    // Step 4: Create proxied CNAME to tunnel
+    let output = Command::new("curl")
+        .args([
+            "-sf",
+            "-X", "POST",
+            &format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"),
+            "-H", &format!("X-Auth-Email: {cf_email}"),
+            "-H", &format!("X-Auth-Key: {cf_api_key}"),
+            "-H", "Content-Type: application/json",
+            "--data", &format!(
+                r#"{{"type":"CNAME","name":"*.{domain}","content":"{cname_target}","proxied":true}}"#
+            ),
+        ])
+        .output()
+        .context("Failed to create wildcard CNAME record")?;
+
+    if !output.status.success() {
+        bail!("Failed to create wildcard DNS CNAME for tunnel");
+    }
+
+    println!(
+        "  {} *.{} -> {} (proxied)",
+        style("v").green(),
+        domain,
+        cname_target
     );
 
     Ok(())

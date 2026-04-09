@@ -76,10 +76,13 @@ impl Step for EnsureUser {
     fn to_bash(&self) -> Vec<String> {
         let mut cmds = vec![];
 
-        // Create user if not exists
+        // Create user if not exists (handle leftover group from prior install)
         cmds.push(format!(
-            "id {} >/dev/null 2>&1 || useradd -m -s {} {}",
-            self.name, self.shell, self.name
+            "id {name} >/dev/null 2>&1 || {{ \
+                 getent group {name} >/dev/null 2>&1 && useradd -m -s {shell} -g {name} {name} || \
+                 useradd -m -s {shell} {name}; \
+             }}",
+            name = self.name, shell = self.shell
         ));
 
         // Add to groups
