@@ -311,7 +311,7 @@ impl Manifest {
                 );
                 // Remove any bare key (Hetzner cloud-init injects it) then add with command= restriction
                 format!(
-                    "sed -i '/^ssh-.*{key_short}/d' /home/tengu/.ssh/authorized_keys 2>/dev/null; \
+                    "sed -i '\\|^ssh-.*{key_short}|d' /home/tengu/.ssh/authorized_keys 2>/dev/null; \
                      grep -qF 'git-shell' /home/tengu/.ssh/authorized_keys 2>/dev/null && \
                      grep -qF '{key_short}' /home/tengu/.ssh/authorized_keys 2>/dev/null || \
                      echo '{entry}' >> /home/tengu/.ssh/authorized_keys",
