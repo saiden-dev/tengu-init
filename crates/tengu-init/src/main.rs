@@ -1,6 +1,6 @@
 //! Tengu Init - Server Provisioning
 //!
-//! Provisions a server with Tengu PaaS installed.
+//! Provisions a server with Tengu `PaaS` installed.
 //! - Default: connects to user@host via SSH and provisions
 //! - `--hetzner`: creates a Hetzner VPS first, then provisions via SSH
 
@@ -620,13 +620,11 @@ fn main() -> Result<()> {
         .cf_email(&resolved.cf_email)
         .resend_api_key(&resolved.resend_api_key)
         .notify_email(&resolved.notify_email)
-        .ssh_keys(
-            if resolved.ssh_key.is_empty() {
-                vec![]
-            } else {
-                vec![resolved.ssh_key.clone()]
-            },
-        )
+        .ssh_keys(if resolved.ssh_key.is_empty() {
+            vec![]
+        } else {
+            vec![resolved.ssh_key.clone()]
+        })
         .release(&resolved.release)
         .enable_ufw(args.ufw)
         .deb_path(args.deb_path.as_ref().map(|p| p.display().to_string()))
@@ -707,7 +705,11 @@ fn main() -> Result<()> {
                     // Key content exists under another name — find it by fingerprint
                     ssh_key_name = Hetzner::find_key_name_by_content(&resolved.ssh_key)?
                         .unwrap_or_else(|| SSH_KEY_NAME.to_string());
-                    println!("  {} SSH key exists as '{}', reusing", style("*").dim(), ssh_key_name);
+                    println!(
+                        "  {} SSH key exists as '{}', reusing",
+                        style("*").dim(),
+                        ssh_key_name
+                    );
                 } else {
                     return Err(e);
                 }
@@ -823,11 +825,15 @@ fn update_wildcard_dns(cf_email: &str, cf_api_key: &str, domain: &str, ip: &str)
     let output = Command::new("curl")
         .args([
             "-sf",
-            "-X", "GET",
+            "-X",
+            "GET",
             &format!("https://api.cloudflare.com/client/v4/zones?name={domain}"),
-            "-H", &format!("X-Auth-Email: {cf_email}"),
-            "-H", &format!("X-Auth-Key: {cf_api_key}"),
-            "-H", "Content-Type: application/json",
+            "-H",
+            &format!("X-Auth-Email: {cf_email}"),
+            "-H",
+            &format!("X-Auth-Key: {cf_api_key}"),
+            "-H",
+            "Content-Type: application/json",
         ])
         .output()
         .context("Failed to call Cloudflare API (zones)")?;
@@ -859,14 +865,17 @@ fn update_wildcard_dns(cf_email: &str, cf_api_key: &str, domain: &str, ip: &str)
         let output = Command::new("curl")
             .args([
                 "-sf",
-                "-X", "PUT",
+                "-X",
+                "PUT",
+                &format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{id}"),
+                "-H",
+                &format!("X-Auth-Email: {cf_email}"),
+                "-H",
+                &format!("X-Auth-Key: {cf_api_key}"),
+                "-H",
+                "Content-Type: application/json",
+                "--data",
                 &format!(
-                    "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{id}"
-                ),
-                "-H", &format!("X-Auth-Email: {cf_email}"),
-                "-H", &format!("X-Auth-Key: {cf_api_key}"),
-                "-H", "Content-Type: application/json",
-                "--data", &format!(
                     r#"{{"type":"A","name":"*.{domain}","content":"{ip}","ttl":1,"proxied":false}}"#
                 ),
             ])
@@ -881,14 +890,17 @@ fn update_wildcard_dns(cf_email: &str, cf_api_key: &str, domain: &str, ip: &str)
         let output = Command::new("curl")
             .args([
                 "-sf",
-                "-X", "POST",
+                "-X",
+                "POST",
+                &format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"),
+                "-H",
+                &format!("X-Auth-Email: {cf_email}"),
+                "-H",
+                &format!("X-Auth-Key: {cf_api_key}"),
+                "-H",
+                "Content-Type: application/json",
+                "--data",
                 &format!(
-                    "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
-                ),
-                "-H", &format!("X-Auth-Email: {cf_email}"),
-                "-H", &format!("X-Auth-Key: {cf_api_key}"),
-                "-H", "Content-Type: application/json",
-                "--data", &format!(
                     r#"{{"type":"A","name":"*.{domain}","content":"{ip}","ttl":1,"proxied":false}}"#
                 ),
             ])
@@ -900,12 +912,7 @@ fn update_wildcard_dns(cf_email: &str, cf_api_key: &str, domain: &str, ip: &str)
         }
     }
 
-    println!(
-        "  {} *.{} -> {}",
-        style("v").green(),
-        domain,
-        ip
-    );
+    println!("  {} *.{} -> {}", style("v").green(), domain, ip);
 
     Ok(())
 }
@@ -915,6 +922,7 @@ fn update_wildcard_dns(cf_email: &str, cf_api_key: &str, domain: &str, ip: &str)
 /// Used when provisioning via SSH (not Hetzner) — traffic goes through the tunnel.
 /// Replaces any existing A or CNAME record for `*.domain` with a proxied CNAME
 /// to `{tunnel_id}.cfargotunnel.com`.
+#[allow(clippy::too_many_lines)]
 fn update_wildcard_dns_tunnel(
     cf_email: &str,
     cf_api_key: &str,
@@ -932,11 +940,15 @@ fn update_wildcard_dns_tunnel(
     let output = Command::new("curl")
         .args([
             "-sf",
-            "-X", "GET",
+            "-X",
+            "GET",
             &format!("https://api.cloudflare.com/client/v4/zones?name={domain}"),
-            "-H", &format!("X-Auth-Email: {cf_email}"),
-            "-H", &format!("X-Auth-Key: {cf_api_key}"),
-            "-H", "Content-Type: application/json",
+            "-H",
+            &format!("X-Auth-Email: {cf_email}"),
+            "-H",
+            &format!("X-Auth-Key: {cf_api_key}"),
+            "-H",
+            "Content-Type: application/json",
         ])
         .output()
         .context("Failed to call Cloudflare API (zones)")?;
@@ -947,9 +959,13 @@ fn update_wildcard_dns_tunnel(
 
     // Step 2: Get tunnel ID from cloudflared on the remote (already created by setup_tunnel)
     // We need the full UUID for the CNAME target
-    let tunnel_list = Command::new("ssh")
-        .args(["-o", "ConnectTimeout=5", "root@localhost",
-            &format!("cloudflared tunnel list -n {tunnel_name} -o json 2>/dev/null || true")])
+    let _tunnel_list = Command::new("ssh")
+        .args([
+            "-o",
+            "ConnectTimeout=5",
+            "root@localhost",
+            &format!("cloudflared tunnel list -n {tunnel_name} -o json 2>/dev/null || true"),
+        ])
         .output();
 
     // Fallback: use cloudflared locally if available, or construct from tunnel route dns output
@@ -958,18 +974,22 @@ fn update_wildcard_dns_tunnel(
     let tunnels_output = Command::new("curl")
         .args([
             "-sf",
-            "-X", "GET",
-            &format!("https://api.cloudflare.com/client/v4/accounts"),
-            "-H", &format!("X-Auth-Email: {cf_email}"),
-            "-H", &format!("X-Auth-Key: {cf_api_key}"),
-            "-H", "Content-Type: application/json",
+            "-X",
+            "GET",
+            "https://api.cloudflare.com/client/v4/accounts",
+            "-H",
+            &format!("X-Auth-Email: {cf_email}"),
+            "-H",
+            &format!("X-Auth-Key: {cf_api_key}"),
+            "-H",
+            "Content-Type: application/json",
         ])
         .output()
         .context("Failed to get CF accounts")?;
 
     let accounts_json = String::from_utf8_lossy(&tunnels_output.stdout);
-    let account_id = extract_json_field(&accounts_json, "id")
-        .context("Failed to extract account ID")?;
+    let account_id =
+        extract_json_field(&accounts_json, "id").context("Failed to extract account ID")?;
 
     // Get tunnel UUID
     let tunnels_output = Command::new("curl")
@@ -985,8 +1005,8 @@ fn update_wildcard_dns_tunnel(
         .context("Failed to get tunnel info")?;
 
     let tunnels_json = String::from_utf8_lossy(&tunnels_output.stdout);
-    let tunnel_id = extract_json_field(&tunnels_json, "id")
-        .context("Failed to extract tunnel ID")?;
+    let tunnel_id =
+        extract_json_field(&tunnels_json, "id").context("Failed to extract tunnel ID")?;
 
     let cname_target = format!("{tunnel_id}.cfargotunnel.com");
 
@@ -1311,7 +1331,10 @@ fn print_success(cfg: &ResolvedConfig) {
 
     table.add_row(vec![
         Cell::new("SSH").fg(Color::Cyan),
-        Cell::new(format!("ssh {}@ssh.{}", cfg.admin_user, cfg.domain_platform)),
+        Cell::new(format!(
+            "ssh {}@ssh.{}",
+            cfg.admin_user, cfg.domain_platform
+        )),
     ]);
     table.add_row(vec![
         Cell::new("API").fg(Color::Cyan),

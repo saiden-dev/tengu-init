@@ -51,7 +51,6 @@ impl WriteFile {
         let result = hasher.finalize();
         hex::encode(result)
     }
-
 }
 
 impl Step for WriteFile {

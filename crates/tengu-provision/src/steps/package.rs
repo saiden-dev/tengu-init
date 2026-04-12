@@ -227,11 +227,11 @@ track_pkg {name}"#,
     }
 
     fn check_command(&self) -> Option<String> {
-        self.custom_check
-            .clone()
-            .or_else(|| Some(format!(
+        self.custom_check.clone().or_else(|| {
+            Some(format!(
                 "dpkg -s {} 2>/dev/null | grep -q '^Status: install ok installed'",
                 self.name
-            )))
+            ))
+        })
     }
 }

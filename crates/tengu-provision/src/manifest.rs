@@ -245,13 +245,9 @@ impl Manifest {
         // docker.service requires docker.socket for socket activation
         manifest.add_step(EnsureService::new("docker.socket"));
         manifest.add_step(
-            EnsureService::new("docker")
-                .with_readiness_check("docker info >/dev/null 2>&1"),
+            EnsureService::new("docker").with_readiness_check("docker info >/dev/null 2>&1"),
         );
-        manifest.add_step(
-            EnsureService::new("postgresql")
-                .with_readiness_check("pg_isready -q"),
-        );
+        manifest.add_step(EnsureService::new("postgresql").with_readiness_check("pg_isready -q"));
         manifest.add_step(EnsureService::new("fail2ban"));
         manifest.add_step(EnsureService::new("caddy"));
 
@@ -275,8 +271,7 @@ impl Manifest {
                 "DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold /tmp/tengu-local.deb || apt-get install -f -y",
             ));
         } else {
-            let tengu_deb_url =
-                "https://github.com/tengu-apps/tengu-deb/releases/download/current/tengu_{arch}.deb";
+            let tengu_deb_url = "https://github.com/tengu-apps/tengu-deb/releases/download/current/tengu_{arch}.deb";
             manifest.add_step(InstallDebFromUrl::new("tengu", tengu_deb_url));
         }
 
@@ -291,9 +286,7 @@ impl Manifest {
                 "Set tengu user shell to /bin/bash",
                 "usermod -s /bin/bash tengu",
             )
-            .unless(
-                r"getent passwd tengu | grep -q '/bin/bash'",
-            ),
+            .unless(r"getent passwd tengu | grep -q '/bin/bash'"),
         );
 
         // Place the setup SSH key into tengu's authorized_keys with git-shell restriction.
@@ -319,20 +312,17 @@ impl Manifest {
                 )
             }).collect();
 
-            let mut bash = String::from(
-                "mkdir -p /home/tengu/.ssh && chmod 700 /home/tengu/.ssh && "
-            );
+            let mut bash =
+                String::from("mkdir -p /home/tengu/.ssh && chmod 700 /home/tengu/.ssh && ");
             bash.push_str(&key_cmds.join(" && "));
             bash.push_str(
                 " && chmod 600 /home/tengu/.ssh/authorized_keys && chown -R tengu:tengu /home/tengu/.ssh"
             );
 
-            manifest.add_step(
-                RunCommand::new(
-                    "Add setup SSH key to tengu authorized_keys",
-                    &bash,
-                )
-            );
+            manifest.add_step(RunCommand::new(
+                "Add setup SSH key to tengu authorized_keys",
+                &bash,
+            ));
         }
 
         // =========================================================
@@ -400,7 +390,10 @@ impl Manifest {
         // =========================================================
 
         // Create admin user with SSH key and save token
-        let ssh_key = config.ssh_keys.first().map(|s| s.as_str()).unwrap_or("");
+        let ssh_key = config
+            .ssh_keys
+            .first()
+            .map_or("", std::string::String::as_str);
         let create_user_cmd = format!(
             r#"TENGU_USER_JSON=$(tengu user add {user} --key '{ssh_key}' --admin --json 2>/dev/null || echo '{{}}'); \
                TENGU_TOKEN=$(echo "$TENGU_USER_JSON" | jq -r '.token // empty'); \
@@ -414,7 +407,7 @@ impl Manifest {
         );
         manifest.add_step(
             RunCommand::new("Create Tengu admin user", &create_user_cmd)
-                .unless(&format!(r#"tengu user list --json 2>/dev/null | jq -e '.[] | select(.name == "{}")' >/dev/null"#, config.user)),
+                .unless(format!(r#"tengu user list --json 2>/dev/null | jq -e '.[] | select(.name == "{}")' >/dev/null"#, config.user)),
         );
 
         manifest

@@ -82,7 +82,8 @@ impl Step for EnsureUser {
                  getent group {name} >/dev/null 2>&1 && useradd -m -s {shell} -g {name} {name} || \
                  useradd -m -s {shell} {name}; \
              }}",
-            name = self.name, shell = self.shell
+            name = self.name,
+            shell = self.shell
         ));
 
         // Add to groups

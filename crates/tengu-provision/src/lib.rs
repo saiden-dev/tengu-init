@@ -185,5 +185,4 @@ mod tests {
         // Should NOT have color codes
         assert!(!script.contains("GREEN="));
     }
-
 }

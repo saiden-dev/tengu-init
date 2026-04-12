@@ -117,7 +117,14 @@ impl Hetzner {
     /// Create an SSH key in Hetzner from a public key string
     pub fn create_ssh_key(name: &str, public_key: &str) -> Result<()> {
         let output = Command::new("hcloud")
-            .args(["ssh-key", "create", "--name", name, "--public-key", public_key])
+            .args([
+                "ssh-key",
+                "create",
+                "--name",
+                name,
+                "--public-key",
+                public_key,
+            ])
             .output()
             .context("Failed to create SSH key")?;
 
@@ -144,7 +151,7 @@ impl Hetzner {
             let _ = stdin.write_all(public_key.as_bytes());
         }
         let output = child.wait_with_output()?;
-        let local_fp_line = String::from_utf8_lossy(&output.stdout);
+        let _local_fp_line = String::from_utf8_lossy(&output.stdout);
         // Format: "256 SHA256:xxx comment (ED25519)"  — extract the middle part after MD5 colon-hex
         // hcloud uses MD5 fingerprint format (colon-separated hex)
         let local_fp_output = Command::new("ssh-keygen")
@@ -160,7 +167,10 @@ impl Hetzner {
             let out2 = child2.wait_with_output()?;
             let line = String::from_utf8_lossy(&out2.stdout).to_string();
             // "256 MD5:xx:xx:xx... comment (ED25519)" — extract after "MD5:"
-            line.split_whitespace().nth(1).map(|s| s.replace("MD5:", "")).unwrap_or_default()
+            line.split_whitespace()
+                .nth(1)
+                .map(|s| s.replace("MD5:", ""))
+                .unwrap_or_default()
         } else {
             return Ok(None);
         };

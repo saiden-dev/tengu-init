@@ -69,6 +69,7 @@ impl SshProvider {
     }
 
     /// Generate a removal script that undoes everything tengu-init installed
+    #[allow(clippy::too_many_lines)]
     pub fn generate_removal_script() -> String {
         r#"#!/bin/bash
 set -euo pipefail
@@ -326,10 +327,7 @@ echo ""
 
         // Upload local .deb if specified
         if let Some(deb_path) = &config.deb_path {
-            println!(
-                "{} Uploading local .deb package...",
-                style("*").cyan()
-            );
+            println!("{} Uploading local .deb package...", style("*").cyan());
             self.scp_file(deb_path, "/tmp/tengu-local.deb")?;
             println!("  {} .deb uploaded", style("v").green());
         }
@@ -374,6 +372,7 @@ echo ""
     /// 5. Write the tunnel config.yml
     /// 6. Create DNS CNAME routes for subdomains
     /// 7. Install and start cloudflared as a systemd service
+    #[allow(clippy::too_many_lines)]
     pub fn setup_tunnel(&self, tunnel_config: &TunnelConfig) -> Result<()> {
         let home = if self.user == "root" {
             "/root".to_string()
@@ -383,10 +382,7 @@ echo ""
         let cf_dir = format!("{home}/.cloudflared");
 
         // Step 1: Install cloudflared
-        println!(
-            "\n{} Installing cloudflared...",
-            style("*").cyan()
-        );
+        println!("\n{} Installing cloudflared...", style("*").cyan());
         self.run_ssh_command(
             "if command -v cloudflared >/dev/null 2>&1; then \
                 echo 'cloudflared already installed'; \
@@ -414,8 +410,8 @@ echo ""
                 local_cert.display()
             );
         }
-        let cert_content = std::fs::read_to_string(&local_cert)
-            .context("Failed to read local cert.pem")?;
+        let cert_content =
+            std::fs::read_to_string(&local_cert).context("Failed to read local cert.pem")?;
 
         // Create remote .cloudflared dir and write cert.pem
         self.run_ssh_command(&format!("mkdir -p {cf_dir}"))?;
@@ -449,7 +445,11 @@ echo ""
 
         let tunnel_id = parse_tunnel_id(&create_output)
             .context("Failed to parse tunnel ID from cloudflared output")?;
-        println!("  {} Tunnel created (ID: {})", style("v").green(), &tunnel_id[..8]);
+        println!(
+            "  {} Tunnel created (ID: {})",
+            style("v").green(),
+            &tunnel_id[..8]
+        );
 
         // Step 5: Write config.yml
         let config_yml = format!(
@@ -475,10 +475,7 @@ echo ""
         println!("  {} config.yml written", style("v").green());
 
         // Step 6: Create DNS routes (delete stale records first)
-        println!(
-            "{} Creating DNS routes...",
-            style("*").cyan()
-        );
+        println!("{} Creating DNS routes...", style("*").cyan());
         for subdomain in &["api", "docs", "git", "ssh"] {
             let hostname = format!("{subdomain}.{}", tunnel_config.domain_platform);
             self.run_ssh_command(&format!(
@@ -496,10 +493,7 @@ echo ""
         println!("  {} {}", style("v").green(), apps_ssh);
 
         // Step 7: Install systemd service and start
-        println!(
-            "{} Installing cloudflared service...",
-            style("*").cyan()
-        );
+        println!("{} Installing cloudflared service...", style("*").cyan());
         self.run_ssh_command(&format!(
             "sudo cloudflared --config {cf_dir}/config.yml service install && \
              sudo systemctl enable --now cloudflared"
@@ -573,9 +567,7 @@ echo ""
                 .context("Failed to write file content to SSH")?;
         }
 
-        let output = child
-            .wait_with_output()
-            .context("Failed to upload file")?;
+        let output = child.wait_with_output().context("Failed to upload file")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -609,10 +601,14 @@ echo ""
         let dest = format!("{}:{}", self.ssh_destination(), remote_path);
         let output = Command::new("scp")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "LogLevel=ERROR",
-                "-P", &self.port.to_string(),
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+                "-P",
+                &self.port.to_string(),
                 local_path,
                 &dest,
             ])
@@ -875,10 +871,8 @@ fn parse_progress_marker(line: &str) -> Option<ProgressMarker> {
 ///
 /// The output contains a line like: "Created tunnel tengu with id abcdef12-3456-7890-abcd-ef1234567890"
 fn parse_tunnel_id(output: &str) -> Option<String> {
-    let uuid_re = regex::Regex::new(
-        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-    )
-    .ok()?;
+    let uuid_re =
+        regex::Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").ok()?;
 
     uuid_re.find(output).map(|m| m.as_str().to_string())
 }

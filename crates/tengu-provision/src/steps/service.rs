@@ -49,7 +49,7 @@ impl EnsureService {
 
     /// Set a custom readiness check command.
     /// This command is polled after the service starts until it returns 0.
-    /// Example: `pg_isready` for PostgreSQL, `docker info` for Docker.
+    /// Example: `pg_isready` for `PostgreSQL`, `docker info` for Docker.
     pub fn with_readiness_check(mut self, cmd: impl Into<String>) -> Self {
         self.readiness_check = Some(cmd.into());
         self
