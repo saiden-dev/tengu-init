@@ -1,0 +1,410 @@
+name: pipeline
+
+on:
+  push:
+    branches: [master, main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─── CI (parallel) ──────────────────────────────────────────
+
+  lint:
+    name: lint
+    runs-on: [self-hosted, junkpile]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Clippy fix
+        run: cargo clippy --fix --allow-dirty --allow-staged -- -D warnings
+
+      - name: Clippy check
+        run: cargo clippy -- -D warnings
+
+      - name: Format
+        run: cargo fmt
+
+      - name: Commit fixes
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "ci: auto-fix lint and format [skip ci]"
+            git push
+          fi
+
+  types:
+    name: types
+    runs-on: [self-hosted, junkpile]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Type check
+        run: cargo check --all-targets
+
+  test:
+    name: test
+    runs-on: [self-hosted, junkpile]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run tests
+        run: cargo test --all-targets
+
+  # ─── Builds (after CI, tags only) ───────────────────────────
+
+  build-amd-linux:
+    name: build-amd-linux
+    needs: [lint, types, test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, junkpile]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Build
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tengu-init-linux-amd64
+          path: target/x86_64-unknown-linux-gnu/release/tengu-init
+
+  build-arm-linux:
+    name: build-arm-linux
+    needs: [lint, types, test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, junkpile]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Build
+        run: cross build --release --target aarch64-unknown-linux-gnu
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tengu-init-linux-arm64
+          path: target/aarch64-unknown-linux-gnu/release/tengu-init
+
+  build-deb-amd:
+    name: build-deb-amd
+    needs: [build-amd-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, junkpile]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Download binary artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: tengu-init-linux-amd64
+          path: target/x86_64-unknown-linux-gnu/release/
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+      - name: Build deb
+        run: cargo deb -p tengu-init --no-build --target x86_64-unknown-linux-gnu --output tengu-init_amd64.deb
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tengu-init_amd64.deb
+          path: tengu-init_amd64.deb
+
+  build-deb-arm:
+    name: build-deb-arm
+    needs: [build-arm-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, junkpile]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - name: Download binary artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: tengu-init-linux-arm64
+          path: target/aarch64-unknown-linux-gnu/release/
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+      - name: Build deb
+        run: cargo deb -p tengu-init --no-build --no-strip --target aarch64-unknown-linux-gnu --output tengu-init_arm64.deb
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tengu-init_arm64.deb
+          path: tengu-init_arm64.deb
+
+  build-macos-arm:
+    name: build-macos-arm
+    needs: [lint, types, test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, fuji]
+    env:
+      RUSTUP_HOME: /Users/chi/.rustup-arm
+      CARGO_HOME: /Users/chi/.cargo-arm
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Rust
+        run: |
+          export PATH="$CARGO_HOME/bin:$PATH"
+          if ! command -v rustup &>/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+          fi
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-apple-darwin
+      - name: Build
+        run: |
+          export PATH="$CARGO_HOME/bin:$PATH"
+          cargo build --release --target aarch64-apple-darwin
+      - name: Import certificate
+        run: |
+          op read "op://DEV/apple_developer/developer_id_backup.p12" --force --out-file /tmp/certificate.p12
+          security create-keychain -p "" build-arm.keychain
+          security default-keychain -s build-arm.keychain
+          security unlock-keychain -p "" build-arm.keychain
+          security import /tmp/certificate.p12 -k build-arm.keychain -P "" -T /usr/bin/codesign
+          security list-keychains -d user -s build-arm.keychain login.keychain-db /Library/Keychains/System.keychain
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build-arm.keychain
+          rm -f /tmp/certificate.p12
+      - name: Sign binary
+        run: |
+          codesign --force --options runtime --sign "Developer ID Application: Adam Ladachowski (TD4G3U97DW)" \
+            target/aarch64-apple-darwin/release/tengu-init
+          codesign -dv target/aarch64-apple-darwin/release/tengu-init
+      - name: Notarize binary
+        run: |
+          APPLE_ID=$(op read "op://DEV/apple_developer/username" --force -n)
+          APPLE_TEAM_ID=$(op read "op://DEV/apple_developer/APPLE_TEAM_ID" --force -n)
+          APPLE_APP_PASSWORD=$(op read "op://DEV/apple_developer/credential" --force -n)
+          zip -j tengu-init.zip target/aarch64-apple-darwin/release/tengu-init
+          xcrun notarytool submit tengu-init.zip \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+          rm tengu-init.zip
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain build-arm.keychain 2>/dev/null || true
+          security default-keychain -s login.keychain-db 2>/dev/null || true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tengu-init-apple-silicon
+          path: target/aarch64-apple-darwin/release/tengu-init
+
+  build-macos-intel:
+    name: build-macos-intel
+    needs: [lint, types, test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, fuji]
+    env:
+      RUSTUP_HOME: /Users/chi/.rustup-intel
+      CARGO_HOME: /Users/chi/.cargo-intel
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Rust
+        run: |
+          export PATH="$CARGO_HOME/bin:$PATH"
+          if ! command -v rustup &>/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+          fi
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-apple-darwin
+      - name: Build
+        run: |
+          export PATH="$CARGO_HOME/bin:$PATH"
+          cargo build --release --target x86_64-apple-darwin
+      - name: Import certificate
+        run: |
+          op read "op://DEV/apple_developer/developer_id_backup.p12" --force --out-file /tmp/certificate.p12
+          security create-keychain -p "" build-intel.keychain
+          security default-keychain -s build-intel.keychain
+          security unlock-keychain -p "" build-intel.keychain
+          security import /tmp/certificate.p12 -k build-intel.keychain -P "" -T /usr/bin/codesign
+          security list-keychains -d user -s build-intel.keychain login.keychain-db /Library/Keychains/System.keychain
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build-intel.keychain
+          rm -f /tmp/certificate.p12
+      - name: Sign binary
+        run: |
+          codesign --force --options runtime --sign "Developer ID Application: Adam Ladachowski (TD4G3U97DW)" \
+            target/x86_64-apple-darwin/release/tengu-init
+          codesign -dv target/x86_64-apple-darwin/release/tengu-init
+      - name: Notarize binary
+        run: |
+          APPLE_ID=$(op read "op://DEV/apple_developer/username" --force -n)
+          APPLE_TEAM_ID=$(op read "op://DEV/apple_developer/APPLE_TEAM_ID" --force -n)
+          APPLE_APP_PASSWORD=$(op read "op://DEV/apple_developer/credential" --force -n)
+          zip -j tengu-init.zip target/x86_64-apple-darwin/release/tengu-init
+          xcrun notarytool submit tengu-init.zip \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+          rm tengu-init.zip
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain build-intel.keychain 2>/dev/null || true
+          security default-keychain -s login.keychain-db 2>/dev/null || true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tengu-init-macos-intel
+          path: target/x86_64-apple-darwin/release/tengu-init
+
+  # ─── Release (after all builds) ─────────────────────────────
+
+  release:
+    name: release
+    needs: [build-amd-linux, build-arm-linux, build-deb-amd, build-deb-arm, build-macos-arm, build-macos-intel]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, junkpile]
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          cp artifacts/tengu-init-linux-amd64/tengu-init release/tengu-init-linux-amd64 2>/dev/null || true
+          cp artifacts/tengu-init-linux-arm64/tengu-init release/tengu-init-linux-arm64 2>/dev/null || true
+          cp artifacts/tengu-init-apple-silicon/tengu-init release/tengu-init-apple-silicon 2>/dev/null || true
+          cp artifacts/tengu-init-macos-intel/tengu-init release/tengu-init-macos-intel 2>/dev/null || true
+          cp artifacts/tengu-init_amd64.deb/tengu-init_amd64.deb release/ 2>/dev/null || true
+          cp artifacts/tengu-init_arm64.deb/tengu-init_arm64.deb release/ 2>/dev/null || true
+          chmod +x release/tengu-init-* 2>/dev/null || true
+          ls -la release/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release/*
+          generate_release_notes: true
+
+  update-homebrew:
+    name: update-homebrew
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, junkpile]
+    steps:
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download binaries from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for asset in tengu-init-apple-silicon tengu-init-macos-intel tengu-init-linux-amd64 tengu-init-linux-arm64; do
+            gh release download "${GITHUB_REF_NAME}" -R tengu-apps/tengu-init -p "${asset}" || true
+          done
+          ls -la
+
+      - name: Compute checksums
+        id: checksums
+        run: |
+          for asset in tengu-init-apple-silicon tengu-init-macos-intel tengu-init-linux-amd64 tengu-init-linux-arm64; do
+            sha=$(sha256sum "${asset}" | cut -d' ' -f1)
+            key=$(echo "${asset}" | tr '-' '_')
+            echo "${key}=${sha}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Update Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA_MACOS_ARM="${{ steps.checksums.outputs.tengu_init_apple_silicon }}"
+          SHA_MACOS_INTEL="${{ steps.checksums.outputs.tengu_init_macos_intel }}"
+          SHA_LINUX_AMD="${{ steps.checksums.outputs.tengu_init_linux_amd64 }}"
+          SHA_LINUX_ARM="${{ steps.checksums.outputs.tengu_init_linux_arm64 }}"
+
+          cat > /tmp/tengu-init.rb <<FORMULA
+          class TenguInit < Formula
+            desc "Provision Tengu PaaS servers via SSH"
+            homepage "https://github.com/tengu-apps/tengu-init"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/tengu-apps/tengu-init/releases/download/v#{version}/tengu-init-apple-silicon"
+                sha256 "${SHA_MACOS_ARM}"
+              end
+
+              on_intel do
+                url "https://github.com/tengu-apps/tengu-init/releases/download/v#{version}/tengu-init-macos-intel"
+                sha256 "${SHA_MACOS_INTEL}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/tengu-apps/tengu-init/releases/download/v#{version}/tengu-init-linux-arm64"
+                sha256 "${SHA_LINUX_ARM}"
+              end
+
+              on_intel do
+                url "https://github.com/tengu-apps/tengu-init/releases/download/v#{version}/tengu-init-linux-amd64"
+                sha256 "${SHA_LINUX_AMD}"
+              end
+            end
+
+            def install
+              binary_name = if OS.mac?
+                Hardware::CPU.arm? ? "tengu-init-apple-silicon" : "tengu-init-macos-intel"
+              elsif OS.linux?
+                Hardware::CPU.arm? ? "tengu-init-linux-arm64" : "tengu-init-linux-amd64"
+              end
+              bin.install binary_name => "tengu-init"
+            end
+
+            test do
+              assert_match "tengu-init", shell_output("#{bin}/tengu-init --version")
+            end
+          end
+          FORMULA
+
+          sed -i 's/^          //' /tmp/tengu-init.rb
+
+          CONTENT=$(base64 -w 0 /tmp/tengu-init.rb)
+          EXISTING=$(gh api repos/tengu-apps/homebrew-tap/contents/Formula/tengu-init.rb 2>/dev/null | jq -r '.sha // empty')
+
+          if [ -n "$EXISTING" ]; then
+            gh api -X PUT repos/tengu-apps/homebrew-tap/contents/Formula/tengu-init.rb \
+              -f message="tengu-init ${VERSION}" \
+              -f content="${CONTENT}" \
+              -f sha="${EXISTING}"
+          else
+            gh api -X PUT repos/tengu-apps/homebrew-tap/contents/Formula/tengu-init.rb \
+              -f message="tengu-init ${VERSION}" \
+              -f content="${CONTENT}"
+          fi
