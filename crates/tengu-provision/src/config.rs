@@ -178,10 +178,6 @@ api.{dp} {{
 docs.{dp} {{
     reverse_proxy localhost:8080
 }}
-
-git.{dp} {{
-    reverse_proxy localhost:8080
-}}
 ",
                 acme_email = acme_email,
                 dp = self.domain_platform,
