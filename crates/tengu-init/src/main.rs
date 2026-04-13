@@ -331,9 +331,7 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
         if !has_cf && !args.yes {
             println!(
                 "\n{}",
-                style("--- Tengu Init \u{2014} TLS Mode ---")
-                    .cyan()
-                    .bold()
+                style("--- Tengu Init \u{2014} TLS Mode ---").cyan().bold()
             );
             let selection = dialoguer::Select::new()
                 .with_prompt("TLS mode")
@@ -888,10 +886,7 @@ fn main() -> Result<()> {
                 style("!").yellow().bold(),
                 style("DNS Configuration Required").yellow().bold()
             );
-            println!(
-                "  Point these A records to {}:",
-                style(ip_hint).cyan()
-            );
+            println!("  Point these A records to {}:", style(ip_hint).cyan());
             println!("    api.{}", resolved.domain_platform);
             println!("    docs.{}", resolved.domain_platform);
             println!("    git.{}", resolved.domain_platform);
@@ -1218,31 +1213,29 @@ fn run_show(config: &Config) -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| "tengu.host".to_string()),
         )
-        .tls_mode(
-            if config.mode.tls.as_deref() == Some("direct") {
-                TlsMode::Direct {
-                    acme_email: config
-                        .mode
-                        .acme_email
-                        .clone()
-                        .or_else(|| config.notifications.email.clone())
-                        .unwrap_or_else(|| "admin@example.com".to_string()),
-                }
-            } else {
-                TlsMode::Cloudflare {
-                    api_key: config
-                        .cloudflare
-                        .api_key
-                        .clone()
-                        .unwrap_or_else(|| "<CF_API_KEY>".to_string()),
-                    email: config
-                        .cloudflare
-                        .email
-                        .clone()
-                        .unwrap_or_else(|| "<CF_EMAIL>".to_string()),
-                }
-            },
-        )
+        .tls_mode(if config.mode.tls.as_deref() == Some("direct") {
+            TlsMode::Direct {
+                acme_email: config
+                    .mode
+                    .acme_email
+                    .clone()
+                    .or_else(|| config.notifications.email.clone())
+                    .unwrap_or_else(|| "admin@example.com".to_string()),
+            }
+        } else {
+            TlsMode::Cloudflare {
+                api_key: config
+                    .cloudflare
+                    .api_key
+                    .clone()
+                    .unwrap_or_else(|| "<CF_API_KEY>".to_string()),
+                email: config
+                    .cloudflare
+                    .email
+                    .clone()
+                    .unwrap_or_else(|| "<CF_EMAIL>".to_string()),
+            }
+        })
         .resend_api_key(
             config
                 .resend

@@ -61,7 +61,7 @@ impl TenguConfig {
         matches!(self.tls_mode, TlsMode::Cloudflare { .. })
     }
 
-    /// ACME email address (from CF email or direct acme_email)
+    /// ACME email address (from CF email or direct `acme_email`)
     pub fn acme_email(&self) -> &str {
         match &self.tls_mode {
             TlsMode::Cloudflare { email, .. } => email,
@@ -198,9 +198,7 @@ git.{dp} {{
     pub fn caddy_cloudflare_env(&self) -> String {
         match &self.tls_mode {
             TlsMode::Cloudflare { api_key, email } => format!(
-                "[Service]\nEnvironment=\"CF_API_TOKEN={key}\"\nEnvironment=\"CF_API_KEY={key}\"\nEnvironment=\"CF_API_EMAIL={email}\"\n",
-                key = api_key,
-                email = email,
+                "[Service]\nEnvironment=\"CF_API_TOKEN={api_key}\"\nEnvironment=\"CF_API_KEY={api_key}\"\nEnvironment=\"CF_API_EMAIL={email}\"\n",
             ),
             TlsMode::Direct { .. } => String::new(),
         }
