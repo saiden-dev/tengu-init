@@ -155,57 +155,22 @@ jobs:
   build-macos-arm:
     name: build-macos-arm
     needs: [lint, types, test]
-    if: false # disabled — macOS builds temporarily paused
-    runs-on: macos-latest
-    env:
-      RUSTUP_HOME: /Users/chi/.rustup-arm
-      CARGO_HOME: /Users/chi/.cargo-arm
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, Linux, ARM64]
     steps:
       - uses: actions/checkout@v5
-      - name: Setup Rust
-        run: |
-          export PATH="$CARGO_HOME/bin:$PATH"
-          if ! command -v rustup &>/dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-          fi
-          rustup toolchain install stable --profile minimal
-          rustup target add aarch64-apple-darwin
-      - name: Build
-        run: |
-          export PATH="$CARGO_HOME/bin:$PATH"
-          cargo build --release --target aarch64-apple-darwin
-      - name: Import certificate
-        run: |
-          op read "op://DEV/apple_developer/developer_id_backup.p12" --force --out-file /tmp/certificate.p12
-          security create-keychain -p "" build-arm.keychain
-          security default-keychain -s build-arm.keychain
-          security unlock-keychain -p "" build-arm.keychain
-          security import /tmp/certificate.p12 -k build-arm.keychain -P "" -T /usr/bin/codesign
-          security list-keychains -d user -s build-arm.keychain login.keychain-db /Library/Keychains/System.keychain
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build-arm.keychain
-          rm -f /tmp/certificate.p12
+      - name: Build for macOS ARM64
+        run: cargo zigbuild --release --target aarch64-apple-darwin
       - name: Sign binary
+        env:
+          APPLE_SIGNING_KEY: ${{ secrets.APPLE_SIGNING_KEY }}
         run: |
-          codesign --force --options runtime --sign "Developer ID Application: Adam Ladachowski (TD4G3U97DW)" \
+          echo "$APPLE_SIGNING_KEY" | base64 -d > /tmp/signing-key.p8
+          rcodesign sign \
+            --pem-source /tmp/signing-key.p8 \
+            --code-signature-flags runtime \
             target/aarch64-apple-darwin/release/tengu-init
-          codesign -dv target/aarch64-apple-darwin/release/tengu-init
-      - name: Notarize binary
-        run: |
-          APPLE_ID=$(op read "op://DEV/apple_developer/username" --force -n)
-          APPLE_TEAM_ID=$(op read "op://DEV/apple_developer/APPLE_TEAM_ID" --force -n)
-          APPLE_APP_PASSWORD=$(op read "op://DEV/apple_developer/credential" --force -n)
-          zip -j tengu-init.zip target/aarch64-apple-darwin/release/tengu-init
-          xcrun notarytool submit tengu-init.zip \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --wait
-          rm tengu-init.zip
-      - name: Cleanup keychain
-        if: always()
-        run: |
-          security delete-keychain build-arm.keychain 2>/dev/null || true
-          security default-keychain -s login.keychain-db 2>/dev/null || true
+          rm -f /tmp/signing-key.p8
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -215,57 +180,22 @@ jobs:
   build-macos-intel:
     name: build-macos-intel
     needs: [lint, types, test]
-    if: false # disabled — macOS builds temporarily paused
-    runs-on: macos-latest
-    env:
-      RUSTUP_HOME: /Users/chi/.rustup-intel
-      CARGO_HOME: /Users/chi/.cargo-intel
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
-      - name: Setup Rust
-        run: |
-          export PATH="$CARGO_HOME/bin:$PATH"
-          if ! command -v rustup &>/dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-          fi
-          rustup toolchain install stable --profile minimal
-          rustup target add x86_64-apple-darwin
-      - name: Build
-        run: |
-          export PATH="$CARGO_HOME/bin:$PATH"
-          cargo build --release --target x86_64-apple-darwin
-      - name: Import certificate
-        run: |
-          op read "op://DEV/apple_developer/developer_id_backup.p12" --force --out-file /tmp/certificate.p12
-          security create-keychain -p "" build-intel.keychain
-          security default-keychain -s build-intel.keychain
-          security unlock-keychain -p "" build-intel.keychain
-          security import /tmp/certificate.p12 -k build-intel.keychain -P "" -T /usr/bin/codesign
-          security list-keychains -d user -s build-intel.keychain login.keychain-db /Library/Keychains/System.keychain
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build-intel.keychain
-          rm -f /tmp/certificate.p12
+      - name: Build for macOS x86_64
+        run: cargo zigbuild --release --target x86_64-apple-darwin
       - name: Sign binary
+        env:
+          APPLE_SIGNING_KEY: ${{ secrets.APPLE_SIGNING_KEY }}
         run: |
-          codesign --force --options runtime --sign "Developer ID Application: Adam Ladachowski (TD4G3U97DW)" \
+          echo "$APPLE_SIGNING_KEY" | base64 -d > /tmp/signing-key.p8
+          rcodesign sign \
+            --pem-source /tmp/signing-key.p8 \
+            --code-signature-flags runtime \
             target/x86_64-apple-darwin/release/tengu-init
-          codesign -dv target/x86_64-apple-darwin/release/tengu-init
-      - name: Notarize binary
-        run: |
-          APPLE_ID=$(op read "op://DEV/apple_developer/username" --force -n)
-          APPLE_TEAM_ID=$(op read "op://DEV/apple_developer/APPLE_TEAM_ID" --force -n)
-          APPLE_APP_PASSWORD=$(op read "op://DEV/apple_developer/credential" --force -n)
-          zip -j tengu-init.zip target/x86_64-apple-darwin/release/tengu-init
-          xcrun notarytool submit tengu-init.zip \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --wait
-          rm tengu-init.zip
-      - name: Cleanup keychain
-        if: always()
-        run: |
-          security delete-keychain build-intel.keychain 2>/dev/null || true
-          security default-keychain -s login.keychain-db 2>/dev/null || true
+          rm -f /tmp/signing-key.p8
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -276,7 +206,7 @@ jobs:
 
   release:
     name: release
-    needs: [build-amd-linux, build-arm-linux, build-deb-amd, build-deb-arm]
+    needs: [build-amd-linux, build-arm-linux, build-deb-amd, build-deb-arm, build-macos-arm, build-macos-intel]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: [self-hosted, Linux, X64]
     steps:
