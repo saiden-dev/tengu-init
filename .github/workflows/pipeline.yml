@@ -152,65 +152,11 @@ jobs:
           name: tengu-init_arm64.deb
           path: tengu-init_arm64.deb
 
-  build-macos-arm:
-    name: build-macos-arm
-    needs: [lint, types, test]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, Linux, ARM64]
-    steps:
-      - uses: actions/checkout@v5
-      - name: Build for macOS ARM64
-        run: |
-          rustup target add aarch64-apple-darwin
-          cargo zigbuild --release --target aarch64-apple-darwin
-      - name: Sign binary
-        env:
-          APPLE_SIGNING_KEY: ${{ secrets.APPLE_SIGNING_KEY }}
-        run: |
-          echo "$APPLE_SIGNING_KEY" | base64 -d > /tmp/signing-key.p8
-          rcodesign sign \
-            --pem-source /tmp/signing-key.p8 \
-            --code-signature-flags runtime \
-            target/aarch64-apple-darwin/release/tengu-init
-          rm -f /tmp/signing-key.p8
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: tengu-init-apple-silicon
-          path: target/aarch64-apple-darwin/release/tengu-init
-
-  build-macos-intel:
-    name: build-macos-intel
-    needs: [lint, types, test]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, Linux, X64]
-    steps:
-      - uses: actions/checkout@v5
-      - name: Build for macOS x86_64
-        run: |
-          rustup target add x86_64-apple-darwin
-          cargo zigbuild --release --target x86_64-apple-darwin
-      - name: Sign binary
-        env:
-          APPLE_SIGNING_KEY: ${{ secrets.APPLE_SIGNING_KEY }}
-        run: |
-          echo "$APPLE_SIGNING_KEY" | base64 -d > /tmp/signing-key.p8
-          rcodesign sign \
-            --pem-source /tmp/signing-key.p8 \
-            --code-signature-flags runtime \
-            target/x86_64-apple-darwin/release/tengu-init
-          rm -f /tmp/signing-key.p8
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: tengu-init-macos-intel
-          path: target/x86_64-apple-darwin/release/tengu-init
-
   # ─── Release (after all builds) ─────────────────────────────
 
   release:
     name: release
-    needs: [build-amd-linux, build-arm-linux, build-deb-amd, build-deb-arm, build-macos-arm, build-macos-intel]
+    needs: [build-amd-linux, build-arm-linux, build-deb-amd, build-deb-arm]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: [self-hosted, Linux, X64]
     steps:
@@ -224,8 +170,6 @@ jobs:
           mkdir -p release
           cp artifacts/tengu-init-linux-amd64/tengu-init release/tengu-init-linux-amd64 2>/dev/null || true
           cp artifacts/tengu-init-linux-arm64/tengu-init release/tengu-init-linux-arm64 2>/dev/null || true
-          cp artifacts/tengu-init-apple-silicon/tengu-init release/tengu-init-apple-silicon 2>/dev/null || true
-          cp artifacts/tengu-init-macos-intel/tengu-init release/tengu-init-macos-intel 2>/dev/null || true
           cp artifacts/tengu-init_amd64.deb/tengu-init_amd64.deb release/ 2>/dev/null || true
           cp artifacts/tengu-init_arm64.deb/tengu-init_arm64.deb release/ 2>/dev/null || true
           chmod +x release/tengu-init-* 2>/dev/null || true
@@ -251,7 +195,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for asset in tengu-init-apple-silicon tengu-init-macos-intel tengu-init-linux-amd64 tengu-init-linux-arm64; do
+          for asset in tengu-init-linux-amd64 tengu-init-linux-arm64; do
             gh release download "${GITHUB_REF_NAME}" -R tengu-apps/tengu-init -p "${asset}" || true
           done
           ls -la
@@ -259,7 +203,7 @@ jobs:
       - name: Compute checksums
         id: checksums
         run: |
-          for asset in tengu-init-apple-silicon tengu-init-macos-intel tengu-init-linux-amd64 tengu-init-linux-arm64; do
+          for asset in tengu-init-linux-amd64 tengu-init-linux-arm64; do
             sha=$(sha256sum "${asset}" | cut -d' ' -f1)
             key=$(echo "${asset}" | tr '-' '_')
             echo "${key}=${sha}" >> "$GITHUB_OUTPUT"
@@ -270,8 +214,6 @@ jobs:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          SHA_MACOS_ARM="${{ steps.checksums.outputs.tengu_init_apple_silicon }}"
-          SHA_MACOS_INTEL="${{ steps.checksums.outputs.tengu_init_macos_intel }}"
           SHA_LINUX_AMD="${{ steps.checksums.outputs.tengu_init_linux_amd64 }}"
           SHA_LINUX_ARM="${{ steps.checksums.outputs.tengu_init_linux_arm64 }}"
 
@@ -281,18 +223,6 @@ jobs:
             homepage "https://github.com/tengu-apps/tengu-init"
             version "${VERSION}"
             license "MIT"
-
-            on_macos do
-              on_arm do
-                url "https://github.com/tengu-apps/tengu-init/releases/download/v#{version}/tengu-init-apple-silicon"
-                sha256 "${SHA_MACOS_ARM}"
-              end
-
-              on_intel do
-                url "https://github.com/tengu-apps/tengu-init/releases/download/v#{version}/tengu-init-macos-intel"
-                sha256 "${SHA_MACOS_INTEL}"
-              end
-            end
 
             on_linux do
               on_arm do
@@ -307,9 +237,7 @@ jobs:
             end
 
             def install
-              binary_name = if OS.mac?
-                Hardware::CPU.arm? ? "tengu-init-apple-silicon" : "tengu-init-macos-intel"
-              elsif OS.linux?
+              binary_name = if OS.linux?
                 Hardware::CPU.arm? ? "tengu-init-linux-arm64" : "tengu-init-linux-amd64"
               end
               bin.install binary_name => "tengu-init"
