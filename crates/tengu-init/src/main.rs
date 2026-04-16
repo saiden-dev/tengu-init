@@ -582,9 +582,7 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
         .or_else(|| config.cloudflare.api_token.clone());
 
     let (cf_email, cf_api_key) = match &tls_mode {
-        TlsMode::Cloudflare { api_key, email } => {
-            (Some(email.clone()), Some(api_key.clone()))
-        }
+        TlsMode::Cloudflare { api_key, email } => (Some(email.clone()), Some(api_key.clone())),
         TlsMode::Direct { .. } => {
             // In direct mode, read CF creds silently from config/env (no interactive prompt)
             let email = args
@@ -895,8 +893,8 @@ fn main() -> Result<()> {
     provider.provision(&tengu_config)?;
 
     // Post-provision: mode-dependent setup
-    let has_cf_creds =
-        resolved.cf_api_token.is_some() || (resolved.cf_api_key.is_some() && resolved.cf_email.is_some());
+    let has_cf_creds = resolved.cf_api_token.is_some()
+        || (resolved.cf_api_key.is_some() && resolved.cf_email.is_some());
 
     match &resolved.tls_mode {
         TlsMode::Cloudflare { .. } => {
@@ -975,12 +973,7 @@ fn main() -> Result<()> {
 /// Supports two auth modes:
 /// - Scoped API token: `CF_API_TOKEN` env var
 /// - Global API key: `CF_API_KEY` + `CF_API_EMAIL` env vars
-fn create_dns_record(
-    config: &ResolvedConfig,
-    zone: &str,
-    name: &str,
-    content: &str,
-) -> Result<()> {
+fn create_dns_record(config: &ResolvedConfig, zone: &str, name: &str, content: &str) -> Result<()> {
     let mut cmd = Command::new("flarectl");
     cmd.args([
         "dns",
@@ -1038,10 +1031,7 @@ fn setup_dns_records(config: &ResolvedConfig, ip: &str) -> Result<()> {
     // Apps wildcard — zone is the apps domain
     create_dns_record(config, &config.domain_apps, "*", ip)?;
 
-    println!(
-        "  {} DNS records configured",
-        style("✓").green().bold()
-    );
+    println!("  {} DNS records configured", style("✓").green().bold());
     Ok(())
 }
 
