@@ -1,112 +1,53 @@
-# E2E Release Test — XFS Docker Backing + Direct TLS Validation
+# Auto DNS A Records in Direct Mode
 
-Two features need E2E validation on fresh Hetzner VMs:
-1. **Phase 16 "Byarlant"** (tengu) — XFS loopback backing for Docker overlay2 quotas
-2. **Phase 5.8 "Atlas"** (tengu-init) — Direct TLS mode (`--direct` flag)
+Add automatic Cloudflare DNS record creation to `--direct` mode using flarectl.
 
-Both are code-complete and committed. This is ops-only — no code changes expected.
+## Auth Design
 
-## Pre-Flight
+Two auth paths in `init.toml`:
 
-Before spinning up VMs:
-1. Build latest tengu .deb (ARM64 + AMD64) via CI or locally
-2. Ensure tengu-init binary is current (`cargo build --release`)
-3. Verify DNS: `test-arm.tengu.host` and `test-amd.tengu.host` available for A records
+```toml
+[cloudflare]
+# Option 1: Scoped API Token (preferred, minimal permissions)
+api_token = "cf_scoped_token_here"
 
-## Phase 1: ARM64 Test (cax21, FSN1)
-
-### 1.1 Provision
-```bash
-hcloud server create --name test-arm --type cax41 --location fsn1 --image ubuntu-24.04
-# Note the IP, create DNS A records:
-#   test-arm.tengu.host → <IP>
-#   *.test-arm.tengu.host → <IP>  (if testing app deploy)
-
-tengu-init --direct --hetzner -y \
-    --server-type cax41 --location fsn1 \
-    --deb-path <path-to-arm64-deb>
+# Option 2: Global API Key + email (legacy)
+api_key = "global_key_here"
+email = "adam@example.com"
 ```
 
-Must complete in ONE clean run with zero manual fixes.
+Both work with flarectl:
+- Token: `CF_API_TOKEN` env var
+- Global key: `CF_API_KEY` + `CF_API_EMAIL` env vars
 
-### 1.2 Verify XFS Docker Backing
-```bash
-ssh root@<IP> "docker info | grep -E 'Storage Driver|Backing Filesystem'"
-# Expected: overlay2 / xfs
+tengu-init passes whichever is configured to flarectl via env vars.
 
-ssh root@<IP> "mount | grep /var/lib/docker"
-# Expected: xfs with prjquota
+## DNS Records Created
 
-ssh root@<IP> "grep docker.img /etc/fstab"
-# Expected: fstab entry present
+For `--direct` mode with known server IP:
 
-ssh root@<IP> "docker run --rm --storage-opt size=50M alpine df -h /"
-# Expected: 50M filesystem (NOT full disk)
+| Record | Type | Name | Value | Proxied |
+|--------|------|------|-------|---------|
+| Platform API | A | `api.<domain-platform>` | VM IP | No |
+| Platform Docs | A | `docs.<domain-platform>` | VM IP | No |
+| Apps wildcard | A | `*.<domain-apps>` | VM IP | No |
 
-ssh root@<IP> "cat /etc/docker/daemon.json"
-# Expected: {"storage-driver": "overlay2"}
-```
+Non-proxied so Caddy HTTP-01 challenge works.
 
-### 1.3 Verify Direct TLS
-```bash
-ssh root@<IP> "systemctl status caddy tengu docker postgresql"
-# All active
+## Implementation
 
-ssh root@<IP> "grep -c cloudflare /etc/caddy/Caddyfile"
-# Expected: 0 (no CF references)
+### Phase 1: Dual Auth + DNS via flarectl
 
-ssh root@<IP> "ls /etc/systemd/system/caddy.service.d/ 2>/dev/null"
-# Expected: empty or no such directory
-```
+1. Add `api_token` field to `CloudflareConfig` in main.rs
+2. Add `--cf-token` CLI arg
+3. Populate `cf_email`, `cf_api_key`, `cf_api_token` on `ResolvedConfig` from config/args/env in ALL modes
+4. Replace curl-based `update_wildcard_dns()` with flarectl-based `create_dns_record()`
+5. New `setup_dns_records()` creates all 3 A records via flarectl
+6. Call `setup_dns_records()` in Direct mode post-provision branch (if any CF creds available)
+7. Update existing CF mode to use the same function
 
-### 1.4 Deploy Test App
-```bash
-tengu create test-app
-# git push a minimal static app
-curl -sf https://test-app.test-arm.tengu.host/
-# Expected: 200
-```
+### Phase 2: E2E Verify
 
-### 1.5 Reboot Persistence
-```bash
-ssh root@<IP> "reboot"
-# Wait 30s
-ssh root@<IP> "docker info | grep Backing && docker ps && mount | grep docker"
-# Everything back up, XFS mounted, containers running
-```
-
-### 1.6 Destroy
-```bash
-hcloud server delete test-arm
-# Remove DNS records
-```
-
-## Phase 2: AMD64 Test (cx22, FSN1)
-
-Identical procedure as Phase 1, using:
-- `--server-type cx42` (16 vCPU, 32GB — AMD64 equivalent of production cax41)
-- AMD64 .deb package
-
-## Phase 3: Cleanup
-
-- Remove all test DNS records
-- If both pass: update tengu-init `DEFAULT_RELEASE` to current tag
-- Tag release if warranted
-
-## Failure Protocol
-
-If provisioning fails at any point:
-1. Note the exact step and error
-2. Fix in source
-3. **Destroy** the VM completely (not fix in place)
-4. Create a new fresh VM
-5. Re-run from scratch
-6. Repeat until clean
-
-## Cost
-
-| VM | Type | Cost/hr | Est. time | Total |
-|----|------|---------|-----------|-------|
-| test-arm | cax41 | €0.054 | ~30 min | ~€0.03 |
-| test-amd | cx42 | €0.054 | ~30 min | ~€0.03 |
-| **Total** | | | | **~€0.06** |
+1. Re-provision tengu-arm with `--direct`
+2. Confirm A records created via `dig`
+3. Confirm Caddy gets TLS certs

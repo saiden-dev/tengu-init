@@ -78,6 +78,8 @@ struct DomainsConfig {
 struct CloudflareConfig {
     api_key: Option<String>,
     email: Option<String>,
+    /// Scoped API token (preferred over global key)
+    api_token: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -129,13 +131,17 @@ struct Args {
     #[arg(long)]
     remove: bool,
 
-    /// Cloudflare API key
+    /// Cloudflare API key (global)
     #[arg(long)]
     cf_api_key: Option<String>,
 
-    /// Cloudflare email
+    /// Cloudflare email (with global key)
     #[arg(long)]
     cf_email: Option<String>,
+
+    /// Cloudflare scoped API token (preferred over global key)
+    #[arg(long)]
+    cf_token: Option<String>,
 
     /// Resend API key
     #[arg(long)]
@@ -231,6 +237,11 @@ struct ResolvedConfig {
     notify_email: String,
     ssh_key: String,
     release: String,
+    /// Cloudflare credentials for DNS management (available in ALL modes if configured)
+    cf_email: Option<String>,
+    cf_api_key: Option<String>,
+    /// Scoped API token (preferred over global key for DNS operations)
+    cf_api_token: Option<String>,
 }
 
 /// Hetzner-specific parameters (separate from provisioning config)
@@ -562,6 +573,34 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
             Ok,
         )?;
 
+    // CF credentials for DNS management — available in ALL modes.
+    // Read from CLI args, env vars, config file, or TlsMode (if Cloudflare mode).
+    let cf_api_token = args
+        .cf_token
+        .clone()
+        .or_else(|| env::var("CF_API_TOKEN").ok())
+        .or_else(|| config.cloudflare.api_token.clone());
+
+    let (cf_email, cf_api_key) = match &tls_mode {
+        TlsMode::Cloudflare { api_key, email } => {
+            (Some(email.clone()), Some(api_key.clone()))
+        }
+        TlsMode::Direct { .. } => {
+            // In direct mode, read CF creds silently from config/env (no interactive prompt)
+            let email = args
+                .cf_email
+                .clone()
+                .or_else(|| env::var("CF_EMAIL").ok())
+                .or_else(|| config.cloudflare.email.clone());
+            let key = args
+                .cf_api_key
+                .clone()
+                .or_else(|| env::var("CF_API_KEY").ok())
+                .or_else(|| config.cloudflare.api_key.clone());
+            (email, key)
+        }
+    };
+
     Ok(ResolvedConfig {
         admin_user,
         domain_platform,
@@ -571,6 +610,9 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
         notify_email,
         ssh_key,
         release,
+        cf_email,
+        cf_api_key,
+        cf_api_token,
     })
 }
 
@@ -853,8 +895,11 @@ fn main() -> Result<()> {
     provider.provision(&tengu_config)?;
 
     // Post-provision: mode-dependent setup
+    let has_cf_creds =
+        resolved.cf_api_token.is_some() || (resolved.cf_api_key.is_some() && resolved.cf_email.is_some());
+
     match &resolved.tls_mode {
-        TlsMode::Cloudflare { api_key, email } => {
+        TlsMode::Cloudflare { .. } => {
             // Set up Cloudflare Tunnel
             let tunnel_config = TunnelConfig {
                 domain_platform: resolved.domain_platform.clone(),
@@ -863,39 +908,55 @@ fn main() -> Result<()> {
             };
             provider.setup_tunnel(&tunnel_config)?;
 
-            // Update wildcard DNS for apps domain
+            // DNS records — via flarectl
             if let Some(ref ip) = server_ip {
-                // Hetzner mode: point *.apps-domain to VM IP (A record, not proxied)
-                update_wildcard_dns(email, api_key, &resolved.domain_apps, ip)?;
+                setup_dns_records(&resolved, ip)?;
             } else {
-                // Local/SSH mode: point *.apps-domain to tunnel (CNAME, proxied)
-                update_wildcard_dns_tunnel(
-                    email,
-                    api_key,
-                    &resolved.domain_apps,
-                    &tunnel_config.tunnel_name,
-                )?;
+                // SSH mode with tunnel — CNAME to tunnel (keep legacy curl for now)
+                if let (Some(key), Some(email)) = (&resolved.cf_api_key, &resolved.cf_email) {
+                    update_wildcard_dns_tunnel(
+                        email,
+                        key,
+                        &resolved.domain_apps,
+                        &tunnel_config.tunnel_name,
+                    )?;
+                }
             }
         }
         TlsMode::Direct { .. } => {
-            // No tunnel setup needed in direct mode.
-            // Print DNS reminder — user must configure A records manually.
-            let ip_hint = server_ip.as_deref().unwrap_or("<your-server-ip>");
-            println!(
-                "\n{} {}",
-                style("!").yellow().bold(),
-                style("DNS Configuration Required").yellow().bold()
-            );
-            println!("  Point these A records to {}:", style(ip_hint).cyan());
-            println!("    api.{}", resolved.domain_platform);
-            println!("    docs.{}", resolved.domain_platform);
-            println!(
-                "    *.{}  (apps + git deploy via SSH)",
-                resolved.domain_apps
-            );
-            println!(
-                "\n  Caddy will automatically obtain Let's Encrypt certificates once DNS resolves.\n"
-            );
+            // Direct mode: create A records if CF credentials are available
+            if has_cf_creds {
+                if let Some(ref ip) = server_ip {
+                    setup_dns_records(&resolved, ip)?;
+                } else {
+                    println!(
+                        "\n{} No server IP available — DNS records must be created manually.",
+                        style("!").yellow()
+                    );
+                }
+            } else {
+                // No CF credentials — print manual DNS reminder
+                let ip_hint = server_ip.as_deref().unwrap_or("<your-server-ip>");
+                println!(
+                    "\n{} {}",
+                    style("!").yellow().bold(),
+                    style("DNS Configuration Required").yellow().bold()
+                );
+                println!("  Point these A records to {}:", style(ip_hint).cyan());
+                println!("    api.{}", resolved.domain_platform);
+                println!("    docs.{}", resolved.domain_platform);
+                println!(
+                    "    *.{}  (apps + git deploy via SSH)",
+                    resolved.domain_apps
+                );
+                println!(
+                    "\n  Caddy will automatically obtain Let's Encrypt certificates once DNS resolves."
+                );
+                println!(
+                    "  {} Add [cloudflare] credentials to init.toml for automatic DNS setup.\n",
+                    style("tip:").dim()
+                );
+            }
         }
     }
 
@@ -909,113 +970,78 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Update the wildcard DNS A record (e.g., `*.tengu.host`) to point to the new VM IP.
+/// Create or update a DNS A record via flarectl.
 ///
-/// Uses the Cloudflare API via `curl`:
-/// 1. GET zone ID for the domain
-/// 2. GET record ID for the wildcard `*` A record
-/// 3. PUT to update the A record with the new IP
-fn update_wildcard_dns(cf_email: &str, cf_api_key: &str, domain: &str, ip: &str) -> Result<()> {
+/// Supports two auth modes:
+/// - Scoped API token: `CF_API_TOKEN` env var
+/// - Global API key: `CF_API_KEY` + `CF_API_EMAIL` env vars
+fn create_dns_record(
+    config: &ResolvedConfig,
+    zone: &str,
+    name: &str,
+    content: &str,
+) -> Result<()> {
+    let mut cmd = Command::new("flarectl");
+    cmd.args([
+        "dns",
+        "create-or-update",
+        "--zone",
+        zone,
+        "--type",
+        "A",
+        "--name",
+        name,
+        "--content",
+        content,
+        "--ttl",
+        "1",
+    ]);
+
+    // Set auth env vars — token takes priority over global key
+    if let Some(token) = &config.cf_api_token {
+        cmd.env("CF_API_TOKEN", token);
+    } else if let (Some(key), Some(email)) = (&config.cf_api_key, &config.cf_email) {
+        cmd.env("CF_API_KEY", key);
+        cmd.env("CF_API_EMAIL", email);
+    } else {
+        bail!("No Cloudflare credentials available for DNS");
+    }
+
+    let output = cmd.output().context("Failed to run flarectl")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("flarectl dns create-or-update failed: {stderr}");
+    }
+
+    println!("  {} {}.{} -> {}", style("v").green(), name, zone, content);
+    Ok(())
+}
+
+/// Set up all required DNS A records for a Tengu instance.
+///
+/// Creates:
+/// - `api.<domain-platform>` → VM IP
+/// - `docs.<domain-platform>` → VM IP
+/// - `*.<domain-apps>` → VM IP
+fn setup_dns_records(config: &ResolvedConfig, ip: &str) -> Result<()> {
     println!(
-        "\n{} Updating *.{} DNS to {}...",
+        "\n{} Setting up DNS records (→ {})...",
         style("*").cyan(),
-        domain,
         style(ip).cyan()
     );
 
-    // Step 1: Get zone ID
-    let output = Command::new("curl")
-        .args([
-            "-sf",
-            "-X",
-            "GET",
-            &format!("https://api.cloudflare.com/client/v4/zones?name={domain}"),
-            "-H",
-            &format!("X-Auth-Email: {cf_email}"),
-            "-H",
-            &format!("X-Auth-Key: {cf_api_key}"),
-            "-H",
-            "Content-Type: application/json",
-        ])
-        .output()
-        .context("Failed to call Cloudflare API (zones)")?;
+    // Platform records (api + docs) — zone is the platform domain
+    create_dns_record(config, &config.domain_platform, "api", ip)?;
+    create_dns_record(config, &config.domain_platform, "docs", ip)?;
 
-    let zones_json = String::from_utf8_lossy(&output.stdout);
-    let zone_id = extract_json_field(&zones_json, "id")
-        .context("Failed to extract zone ID from Cloudflare response")?;
+    // Apps wildcard — zone is the apps domain
+    create_dns_record(config, &config.domain_apps, "*", ip)?;
 
-    // Step 2: Get wildcard A record ID
-    let output = Command::new("curl")
-        .args([
-            "-sf",
-            "-X", "GET",
-            &format!(
-                "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name=*.{domain}"
-            ),
-            "-H", &format!("X-Auth-Email: {cf_email}"),
-            "-H", &format!("X-Auth-Key: {cf_api_key}"),
-            "-H", "Content-Type: application/json",
-        ])
-        .output()
-        .context("Failed to call Cloudflare API (dns_records)")?;
-
-    let records_json = String::from_utf8_lossy(&output.stdout);
-    let record_id = extract_json_field(&records_json, "id");
-
-    if let Some(id) = record_id {
-        // Update existing record
-        let output = Command::new("curl")
-            .args([
-                "-sf",
-                "-X",
-                "PUT",
-                &format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{id}"),
-                "-H",
-                &format!("X-Auth-Email: {cf_email}"),
-                "-H",
-                &format!("X-Auth-Key: {cf_api_key}"),
-                "-H",
-                "Content-Type: application/json",
-                "--data",
-                &format!(
-                    r#"{{"type":"A","name":"*.{domain}","content":"{ip}","ttl":1,"proxied":false}}"#
-                ),
-            ])
-            .output()
-            .context("Failed to update DNS record")?;
-
-        if !output.status.success() {
-            bail!("Failed to update wildcard DNS record");
-        }
-    } else {
-        // Create new record
-        let output = Command::new("curl")
-            .args([
-                "-sf",
-                "-X",
-                "POST",
-                &format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"),
-                "-H",
-                &format!("X-Auth-Email: {cf_email}"),
-                "-H",
-                &format!("X-Auth-Key: {cf_api_key}"),
-                "-H",
-                "Content-Type: application/json",
-                "--data",
-                &format!(
-                    r#"{{"type":"A","name":"*.{domain}","content":"{ip}","ttl":1,"proxied":false}}"#
-                ),
-            ])
-            .output()
-            .context("Failed to create DNS record")?;
-
-        if !output.status.success() {
-            bail!("Failed to create wildcard DNS record");
-        }
-    }
-
-    println!("  {} *.{} -> {}", style("v").green(), domain, ip);
-
+    println!(
+        "  {} DNS records configured",
+        style("✓").green().bold()
+    );
     Ok(())
 }
 
